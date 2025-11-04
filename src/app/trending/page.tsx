@@ -952,11 +952,49 @@ export default function TrendingPage() {
       particles.push(new Particle());
     }
 
+    // 鼠标交互：靠近时粒子加速散开（与首页一致）
+    let mouseX = 0, mouseY = 0, mouseActive = false;
+    const onMouseMove = (e: MouseEvent) => {
+      const rect = canvasEl.getBoundingClientRect();
+      mouseX = e.clientX - rect.left;
+      mouseY = e.clientY - rect.top;
+      mouseActive = true;
+    };
+    const onMouseLeave = () => { mouseActive = false; };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseleave', onMouseLeave);
+
     const animate = () => {
       ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
       // 更新位置与尺寸
       particles.forEach((p) => p.update());
+
+      // 鼠标靠近加速散开（径向推力，与首页一致）
+      if (mouseActive) {
+        const influenceR = 150; // 影响半径
+        const forceBase = 0.12; // 基础加速度
+        const maxSpeed = 1.4;   // 限制最大速度，避免失控
+        for (const p of particles) {
+          const dx = p.x - mouseX;
+          const dy = p.y - mouseY;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 0 && dist < influenceR) {
+            const strength = 1 - (dist / influenceR);
+            const accel = forceBase * strength;
+            const nx = dx / dist;
+            const ny = dy / dist;
+            p.speedX += nx * accel;
+            p.speedY += ny * accel;
+            // 速度限制
+            const v = Math.hypot(p.speedX, p.speedY);
+            if (v > maxSpeed) {
+              p.speedX = (p.speedX / v) * maxSpeed;
+              p.speedY = (p.speedY / v) * maxSpeed;
+            }
+          }
+        }
+      }
 
       // 构建空间哈希网格
       const grid = new Map<string, number[]>();
@@ -1031,6 +1069,8 @@ export default function TrendingPage() {
 
     return () => {
       window.removeEventListener("resize", resize);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseleave', onMouseLeave);
       if (animId) cancelAnimationFrame(animId);
     };
   }, []);
@@ -1268,7 +1308,13 @@ export default function TrendingPage() {
 
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-pink-100 via-purple-100 to-pink-50 overflow-hidden text-black">
-      <canvas ref={canvasRef} className="absolute inset-0 z-0" />
+      <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none opacity-60" />
+      {/* 背景装饰，与首页一致 */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-gradient-to-br from-purple-200/30 to-pink-200/30 rounded-full blur-3xl"></div>
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-gradient-to-br from-blue-200/30 to-cyan-200/30 rounded-full blur-3xl"></div>
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-gradient-to-br from-indigo-200/20 to-purple-200/20 rounded-full blur-3xl"></div>
+      </div>
       <TopNavBar />
 
       {/* 集成筛选栏 - 搜索、分类筛选、排序一体化 */}
@@ -2180,74 +2226,92 @@ export default function TrendingPage() {
                   }}
                 >
                   {/* 关注按钮 */}
-                  <motion.button
-                    data-event-index={i}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      toggleFollow(i, e);
-                    }}
-                    className="absolute top-3 left-3 z-10 p-2 bg-white/90 backdrop-blur-sm rounded-full shadow-md overflow-hidden"
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    animate={followedEvents.has(Number(sortedEvents[i]?.id)) ? "liked" : "unliked"}
-                    variants={{
-                      liked: { 
-                        backgroundColor: "rgba(239, 68, 68, 0.1)",
-                        transition: { duration: 0.3 }
-                      },
-                      unliked: { 
-                        backgroundColor: "rgba(255, 255, 255, 0.9)",
-                        transition: { duration: 0.3 }
-                      }
-                    }}
-                  >
-                    <motion.div
+                  {Number.isFinite(Number(sortedEvents[i]?.id)) && (
+                    <motion.button
+                      data-event-index={i}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleFollow(i, e);
+                      }}
+                      className="absolute top-3 left-3 z-10 p-2 bg-white/90 backdrop-blur-sm rounded-full shadow-md overflow-hidden"
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                       animate={followedEvents.has(Number(sortedEvents[i]?.id)) ? "liked" : "unliked"}
                       variants={{
                         liked: { 
-                          scale: [1, 1.2, 1],
-                          transition: { 
-                            duration: 0.6,
-                            ease: "easeInOut"
-                          }
+                          backgroundColor: "rgba(239, 68, 68, 0.1)",
+                          transition: { duration: 0.3 }
                         },
                         unliked: { 
-                          scale: 1,
+                          backgroundColor: "rgba(255, 255, 255, 0.9)",
                           transition: { duration: 0.3 }
                         }
                       }}
                     >
-                      <Heart 
-                        className={`w-5 h-5 ${
-                          followedEvents.has(Number(sortedEvents[i]?.id)) 
-                            ? 'fill-red-500 text-red-500' 
-                            : 'text-gray-500'
-                        }`} 
-                      />
-                    </motion.div>
-                  </motion.button>
+                      <motion.div
+                        animate={followedEvents.has(Number(sortedEvents[i]?.id)) ? "liked" : "unliked"}
+                        variants={{
+                          liked: { 
+                            scale: [1, 1.2, 1],
+                            transition: { 
+                              duration: 0.6,
+                              ease: "easeInOut"
+                            }
+                          },
+                          unliked: { 
+                            scale: 1,
+                            transition: { duration: 0.3 }
+                          }
+                        }}
+                      >
+                        <Heart 
+                          className={`w-5 h-5 ${
+                            followedEvents.has(Number(sortedEvents[i]?.id)) 
+                              ? 'fill-red-500 text-red-500' 
+                              : 'text-gray-500'
+                          }`} 
+                        />
+                      </motion.div>
+                    </motion.button>
+                  )}
                   
-                  {/* 产品图片 */}
-                  <Link href={`/prediction/${sortedEvents[i]?.id || i + 1}`}>
+                  {/* 产品图片：仅在存在有效 id 时可点击跳转 */}
+                  {Number.isFinite(Number(sortedEvents[i]?.id)) ? (
+                    <Link href={`/prediction/${sortedEvents[i]?.id}`}>
+                      <div className="relative h-48 overflow-hidden">
+                        <img
+                          src={product.image}
+                          alt={product.title}
+                          className="w-full h-full object-cover transition-transform hover:scale-105 duration-300"
+                          onError={(e) => {
+                            const img = e.currentTarget as HTMLImageElement;
+                            img.onerror = null;
+                            img.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(product.title)}&size=400&backgroundColor=b6e3f4,c0aede,d1d4f9&radius=20`;
+                          }}
+                        />
+                        <div className="absolute top-3 right-3 bg-gradient-to-r from-pink-400 to-purple-500 text-white text-sm px-3 py-1 rounded-full">
+                          {product.tag}
+                        </div>
+                      </div>
+                    </Link>
+                  ) : (
                     <div className="relative h-48 overflow-hidden">
                       <img
                         src={product.image}
                         alt={product.title}
-                        className="w-full h-full object-cover transition-transform hover:scale-105 duration-300"
+                        className="w-full h-full object-cover"
                         onError={(e) => {
                           const img = e.currentTarget as HTMLImageElement;
-                          // 避免无限循环
                           img.onerror = null;
                           img.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(product.title)}&size=400&backgroundColor=b6e3f4,c0aede,d1d4f9&radius=20`;
                         }}
                       />
-                      {/* 标签 */}
                       <div className="absolute top-3 right-3 bg-gradient-to-r from-pink-400 to-purple-500 text-white text-sm px-3 py-1 rounded-full">
                         {product.tag}
                       </div>
                     </div>
-                  </Link>
+                  )}
 
                   {/* 产品信息 */}
                   <div className="p-5">
@@ -2266,11 +2330,13 @@ export default function TrendingPage() {
                       <p className="text-black font-bold">
                         {product.minInvestment} 起投
                       </p>
-                      <Link href={`/prediction/${sortedEvents[i]?.id || i + 1}`}>
-                        <button className="px-4 py-2 bg-gradient-to-r from-pink-400 to-purple-500 text-white rounded-full text-sm font-medium hover:from-pink-500 hover:to-purple-600 transition-all duration-300 shadow-md">
-                          参与事件
-                        </button>
-                      </Link>
+                      {Number.isFinite(Number(sortedEvents[i]?.id)) && (
+                        <Link href={`/prediction/${sortedEvents[i]?.id}`}>
+                          <button className="px-4 py-2 bg-gradient-to-r from-pink-400 to-purple-500 text-white rounded-full text-sm font-medium hover:from-pink-500 hover:to-purple-600 transition-all duration-300 shadow-md">
+                            参与事件
+                          </button>
+                        </Link>
+                      )}
                     </div>
                     
                     {/* 关注数显示 */}

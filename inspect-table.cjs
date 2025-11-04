@@ -58,7 +58,9 @@ async function inspectTable() {
     // 尝试插入一条记录来触发错误信息
     console.log('\n尝试插入记录来获取详细错误信息...');
     const testFields = [
-      { user_id: 'test', event_id: 1 }
+      { user_id: 'test', event_id: 1 },
+      { user_id: '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef', event_id: 999999999 },
+      { user_id: '0xtest000000000000000000000000000000000052', event_id: 52 }
     ];
     
     for (const testField of testFields) {
@@ -73,17 +75,39 @@ async function inspectTable() {
         
         if (error) {
           console.log(`  ${fieldName} 插入失败:`, error.message);
+          const msg = String(error.message || '').toLowerCase();
+          if (msg.includes('violates foreign key constraint') && msg.includes('event_follows_event_id_fkey')) {
+            console.log('  诊断: event_id 外键未能匹配 predictions(id)。可能是外键指向了错误的 schema 或旧表。');
+            console.log('  修复建议: 运行 scripts/sql/fix-event-follows-fk.sql 重新建立正确外键。');
+          }
         } else {
           console.log(`  ${fieldName} 插入成功！`, data);
           // 如果成功，立即删除测试数据
           await supabaseAdmin
             .from('event_follows')
             .delete()
-            .eq(fieldName, 'test');
+            .or(`user_id.eq.test,user_id.eq.0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef,user_id.eq.0xtest000000000000000000000000000000000052`);
         }
       } catch (err) {
         console.log(`  ${fieldName} 插入异常:`, err.message);
       }
+    }
+
+    // 额外：确认指定 predictionId 是否存在
+    const checkId = 52;
+    console.log(`\n确认 predictions 中是否存在 id=${checkId} ...`);
+    try {
+      const { count: pidCount, error: pidErr } = await supabaseAdmin
+        .from('predictions')
+        .select('id', { count: 'exact', head: true })
+        .eq('id', checkId);
+      if (pidErr) {
+        console.log('  查询失败:', pidErr.message);
+      } else {
+        console.log('  count =', pidCount);
+      }
+    } catch (e) {
+      console.log('  异常:', e.message);
     }
     
   } catch (err) {

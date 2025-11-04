@@ -86,11 +86,34 @@ export async function POST(req: Request) {
       )
     }
     const body = await parseRequestBody(req)
-    const predictionId = Number(body?.predictionId)
-    const walletAddress = normalizeWalletAddress(String(body?.walletAddress || ''))
+    const rawPredictionId = body?.predictionId
+    const rawWallet = body?.walletAddress
+    const predictionId = Number(rawPredictionId)
+    const walletAddress = normalizeWalletAddress(String(rawWallet || ''))
 
-    if (!predictionId || !walletAddress) {
-      return NextResponse.json({ message: 'predictionId 与 walletAddress 必填' }, { status: 400 })
+    if (!predictionId) {
+      return NextResponse.json({ message: 'predictionId 必填且需为数字', received: String(rawPredictionId ?? '') }, { status: 400 })
+    }
+    if (!rawWallet) {
+      return NextResponse.json({ message: 'walletAddress 必填', received: '' }, { status: 400 })
+    }
+    if (!walletAddress) {
+      return NextResponse.json({ message: 'walletAddress 格式无效，需 0x + 40 位十六进制', received: String(rawWallet) }, { status: 422 })
+    }
+
+    // 前置校验：确认预测事件是否存在，避免外键冲突造成的迷惑性错误
+    const { count: pidCount, error: pidCheckError } = await supabaseAdmin
+      .from('predictions')
+      .select('id', { count: 'exact', head: true })
+      .eq('id', predictionId)
+
+    if (pidCheckError) {
+      // 读取预测事件失败，多半是环境密钥或RLS问题，返回通用错误
+      try { console.error('POST /api/follows check prediction error', { predictionId, message: pidCheckError?.message }) } catch {}
+      return NextResponse.json({ message: '服务端读取预测事件失败，请稍后重试' }, { status: 500 })
+    }
+    if (!pidCount) {
+      return NextResponse.json({ message: 'predictionId 不存在，预测事件已删除或未创建' }, { status: 404 })
     }
 
     // 首先尝试插入（若缺表或结构错误按策略处理）
@@ -146,9 +169,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS event_follows_user_id_event_id_key ON public.e
       }
       // 针对 event_id 外键冲突返回明确的 400
       if (isEventIdForeignKeyViolation(error)) {
+        // 如果预检确认存在但仍发生外键冲突，极可能是 Supabase 表约束指向了错误的表或环境不一致
         return NextResponse.json({
           message: 'predictionId 无效，预测事件不存在或已删除（外键）',
-          detail: error.message
+          detail: error.message,
+          hint: '若该 predictionId 在列表中存在但仍提示无效，请检查 Supabase 中 event_follows.event_id 的外键是否指向 public.predictions(id)，以及 .env.local 的 SUPABASE_* 配置是否与前端一致。'
         }, { status: 400 })
       }
       return NextResponse.json({ message: '关注失败', detail: error.message }, { status: 500 })
