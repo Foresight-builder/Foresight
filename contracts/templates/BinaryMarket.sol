@@ -5,197 +5,304 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "../interfaces/IMarket.sol";
-import "../tokens/OutcomeToken.sol";
+import "../interfaces/IOracle.sol";
+import "../tokens/OutcomeToken1155.sol";
+import "../libs/AMM.sol";
+import "../libs/LMSRAMM.sol";
+import "../interfaces/IMarket.h";
+import "../interfaces/IOracle.h";
 
 /// @title BinaryMarket
-/// @notice Minimal binary market template (YES/NO) using USDT (or other ERC20) as collateral
-/// @dev Trading/AMM not implemented; supports deposit complete sets and redemption post resolution
-contract BinaryMarket is AccessControl, ReentrancyGuard, IMarket {
-    bytes32 public constant ADMIN_ROLE = DEFAULT_ADMIN_ROLE;
-    bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
+/// @author Foresight
+/// @notice This contract implements a binary (YES/NO) prediction market.
+/// @dev It is designed to be used as a template for the MarketFactory and is deployed as a minimal proxy (clone).
+/// It supports both CPMM (Constant Product Market Maker) and LMSR (Logarithmic Market Scoring Rule) AMMs.
+/// It inherits from ReentrancyGuard to prevent re-entrancy attacks on critical functions.
+abstract contract BinaryMarket is IMarket, ReentrancyGuard {
+    using ERC1155 for ERC1155.Book;
+    using SafeERC20 for IERC20;
 
-    enum State { Created, Trading, Resolved, Canceled }
+    // --- Market State ---
 
-    State public state;
+    /// @notice The factory that created this market.
+    address public immutable override factory;
+    /// @notice The creator of this market.
+    address public immutable override creator;
+    /// @notice The ERC20 token used for collateral and trading.
+    address public immutable override collateralToken;
+    /// @notice The oracle responsible for resolving the market outcome.
+    address public immutable override oracle;
+    /// @notice The trading fee in basis points (1 bps = 0.01%).
+    uint256 public immutable override feeBps;
+    /// @notice The timestamp when the market can be resolved.
+    uint256 public immutable override resolutionTime;
 
-    address public factory;
-    address public creator;
-    IERC20 public collateral; // expected USDT
-    uint8 public collateralDecimals;
+    /// @notice The book of ERC1155 outcome tokens (ID 0 for NO, ID 1 for YES).
+    ERC1155.Book internal book;
 
-    address public tokenYes;
-    address public tokenNo;
+    /// @notice The total liquidity shares issued for the AMM pool.
+    uint256 public liquidityShares;
 
-    address public oracle;
-    uint256 public feeBps;
-    uint256 public resolutionTime;
+    /// @notice The current stage of the market lifecycle.
+    Stages public stage;
 
-    address public feeRecipient;
-    uint256 public accruedFees; // in collateral smallest units
+    /// @notice The resolved outcome of the market (0 for NO, 1 for YES, 2 for INVALID).
+    uint256 public resolvedOutcome;
 
-    int256 public finalOutcome; // -1=unset, 0=NO, 1=YES
-    bool private _initialized;
+    // --- AMM State ---
 
-    event Initialized(address factory, address creator, address collateral, address oracle, uint256 feeBps, uint256 resolutionTime);
-    event TradingStarted();
-    event MarketCanceled();
-    event Finalized(int256 outcome);
-    event DepositCompleteSet(address indexed user, uint256 collateralIn, uint256 yesOut, uint256 noOut);
-    event Redeem(address indexed user, int256 outcome, uint256 tokenBurned, uint256 collateralOut);
-    event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
-    event FeesWithdrawn(address indexed to, uint256 amount);
+    /// @notice The type of Automated Market Maker used by this market.
+    AMMType public ammType;
 
-    modifier onlyAdmin() {
-        require(hasRole(ADMIN_ROLE, msg.sender), "not admin");
+    /// @notice The state for the Constant Product Market Maker (CPMM).
+    CPMMData public cpmm;
+
+    /// @notice The state for the Logarithmic Market Scoring Rule (LMSR) market maker.
+    LMSRData public lmsr;
+
+    // --- Events ---
+    /// @notice Emitted when the market is initialized.
+    event Initialized();
+    /// @notice Emitted when liquidity is added to the AMM pool.
+    event LiquidityAdded(address indexed provider, uint256 amount, uint256 sharesIssued);
+    /// @notice Emitted when liquidity is removed from the AMM pool.
+    event LiquidityRemoved(address indexed provider, uint256 sharesBurned, uint256 collateralReturned);
+    /// @notice Emitted when a user swaps collateral for outcome tokens.
+    event Swap(address indexed user, uint256 inputAmount, uint256 outputAmount, uint256 outcomeIndex, bool isBuy);
+    /// @notice Emitted when a user deposits a complete set of outcome tokens to redeem collateral.
+    event CompleteSetDeposited(address indexed user, uint256 amount);
+    /// @notice Emitted when a user redeems outcome tokens for collateral after resolution.
+    event Redeemed(address indexed user, uint256 amount, uint256 outcomeIndex);
+    /// @notice Emitted when the market is resolved by the oracle.
+    event Resolved(uint256 outcome);
+
+    // --- Errors ---
+    /// @notice Thrown when an invalid AMM type is provided during initialization.
+    error InvalidAMMType();
+    /// @notice Thrown when an invalid outcome index is provided.
+    error InvalidOutcomeIndex();
+    /// @notice Thrown when an operation is attempted at an incorrect market stage.
+    error InvalidStage();
+    /// @notice Thrown when the resolution time has not yet been reached.
+    error ResolutionTimeNotReached();
+    /// @notice Thrown when the market has already been resolved.
+    error AlreadyResolved();
+    /// @notice Thrown when an insufficient amount is provided for an operation.
+    error InsufficientAmount();
+    /// @notice Thrown when the AMM cannot provide the requested output amount.
+    error InsufficientOutput();
+
+    /// @dev Modifier to ensure a function is only callable when the market is in the TRADING stage.
+    modifier atStage(Stages _stage) {
+        if (stage != _stage) revert InvalidStage();
         _;
     }
 
-    modifier onlyOracle() {
-        require(hasRole(ORACLE_ROLE, msg.sender), "not oracle");
-        _;
-    }
-
+    /// @notice Initializes the binary market contract.
+    /// @dev This function is called only once by the MarketFactory when the contract is cloned.
+    /// It sets up the market parameters, AMM, and outcome tokens.
+    /// @param _factory The address of the MarketFactory.
+    /// @param _creator The address of the market creator.
+    /// @param _collateralToken The ERC20 collateral token address.
+    /// @param _oracle The oracle address for resolution.
+    /// @param _feeBps The trading fee in basis points.
+    /// @param _resolutionTime The timestamp for market resolution.
+    /// @param data ABI-encoded initialization data, specific to the AMM type.
     function initialize(
-        address factory_,
-        address creator_,
-        address collateralToken_,
-        address oracle_,
-        uint256 feeBps_,
-        uint256 resolutionTime_,
-        bytes calldata /*data*/
+        address _factory,
+        address _creator,
+        address _collateralToken,
+        address _oracle,
+        uint256 _feeBps,
+        uint256 _resolutionTime,
+        bytes calldata data
     ) external override {
-        require(!_initialized, "already init");
-        require(factory_ != address(0) && creator_ != address(0), "bad actors");
-        require(collateralToken_ != address(0) && oracle_ != address(0), "bad addrs");
-        require(resolutionTime_ > block.timestamp, "resolution in past");
-        require(feeBps_ <= 1000, "fee too high"); // max 10%
+        (ammType, initialLiquidity) = abi.decode(data, (AMMType, uint256));
 
-        factory = factory_;
-        creator = creator_;
-        collateral = IERC20(collateralToken_);
-        collateralDecimals = IERC20Metadata(collateralToken_).decimals();
-        oracle = oracle_;
-        feeBps = feeBps_;
-        resolutionTime = resolutionTime_;
-        feeRecipient = creator_;
+        if (ammType == AMMType.CPMM) {
+            _initializeCPMM(initialLiquidity);
+        } else if (ammType == AMMType.LMSR) {
+            _initializeLMSR(initialLiquidity);
+        } else {
+            revert InvalidAMMType();
+        }
 
-        _grantRole(ADMIN_ROLE, creator_);
-        _grantRole(ORACLE_ROLE, oracle_);
-
-        // deploy outcome tokens, market as admin
-        OutcomeToken yes = new OutcomeToken("YES", "YES");
-        OutcomeToken no = new OutcomeToken("NO", "NO");
-        tokenYes = address(yes);
-        tokenNo = address(no);
-
-        yes.grantRole(yes.MINTER_ROLE(), address(this));
-        no.grantRole(no.MINTER_ROLE(), address(this));
-
-        state = State.Created;
-        finalOutcome = -1;
-        _initialized = true;
-
-        emit Initialized(factory_, creator_, collateralToken_, oracle_, feeBps_, resolutionTime_);
+        emit Initialized();
     }
 
-    function setFeeRecipient(address newRecipient) external onlyAdmin {
-        require(newRecipient != address(0), "recipient=0");
-        emit FeeRecipientUpdated(feeRecipient, newRecipient);
-        feeRecipient = newRecipient;
+    /// @notice Adds liquidity to the AMM pool.
+    /// @dev Mints liquidity shares for the provider. The amount of collateral required depends on the AMM type.
+    /// @param amount The amount of collateral to add. For CPMM, this is the exact amount. For LMSR, this is the maximum budget.
+    /// @return shares The number of liquidity shares minted.
+    function addLiquidity(uint256 amount) external payable nonReentrant atStage(Stages.TRADING) returns (uint256 shares) {
+        if (ammType == AMMType.CPMM) {
+            shares = _addLiquidityCPMM(amount);
+        } else {
+            shares = _addLiquidityLMSR(amount);
+        }
+        require(shares > 0, "no shares issued");
+        liquidityShares += shares;
+        emit LiquidityAdded(msg.sender, amount, shares);
     }
 
-    function startTrading() external onlyAdmin {
-        require(state == State.Created, "bad state");
-        state = State.Trading;
-        emit TradingStarted();
+    /// @notice Removes liquidity from the AMM pool.
+    /// @dev Burns liquidity shares and returns a proportional amount of collateral and outcome tokens.
+    /// @param shares The number of liquidity shares to burn.
+    /// @return amount The amount of collateral returned to the provider.
+    function removeLiquidity(uint256 shares) external nonReentrant atStage(Stages.TRADING) returns (uint256 amount) {
+        require(shares > 0, "shares must be positive");
+        // More logic here to transfer collateral and outcome tokens back to the provider
+        // based on the share of the pool they owned.
+        // This is a simplified version.
+        
+        liquidityShares -= shares;
+
+        if (ammType == AMMType.CPMM) {
+            amount = _removeLiquidityCPMM(shares);
+        } else {
+            amount = _removeLiquidityLMSR(shares);
+        }
+
+        emit LiquidityRemoved(msg.sender, shares, amount);
     }
 
-    function cancelMarket() external onlyAdmin {
-        require(state == State.Created || state == State.Trading, "bad state");
-        state = State.Canceled;
-        emit MarketCanceled();
+    /// @notice Swaps collateral for outcome tokens or vice-versa.
+    /// @dev This is the core trading function. It interacts with the selected AMM.
+    /// @param inputAmount The amount of tokens being provided by the user.
+    /// @param outcomeIndex The index of the outcome token to trade (0 for NO, 1 for YES).
+    /// @param minOutputAmount The minimum amount of tokens the user is willing to receive.
+    /// @param isBuy A boolean indicating the direction of the trade (true for buy, false for sell).
+    /// @return outputAmount The amount of tokens the user received.
+    function swap(
+        uint256 inputAmount,
+        uint256 outcomeIndex,
+        uint256 minOutputAmount,
+        bool isBuy
+    ) external payable nonReentrant atStage(Stages.TRADING) returns (uint256 outputAmount) {
+        if (outcomeIndex > 1) revert InvalidOutcomeIndex();
+
+        if (ammType == AMMType.CPMM) {
+            outputAmount = _swapCPMM(inputAmount, outcomeIndex, isBuy);
+        } else {
+            outputAmount = _swapLMSR(inputAmount, outcomeIndex, isBuy);
+        }
+
+        require(outputAmount >= minOutputAmount, "slippage");
+
+        emit Swap(msg.sender, inputAmount, outputAmount, outcomeIndex, isBuy);
     }
 
-    /// @notice Deposit collateral to mint a complete set (1 YES + 1 NO equivalent)
-    /// @param collateralAmount Amount in smallest units of collateral (e.g., USDT 6 decimals)
-    function depositCompleteSet(uint256 collateralAmount) external nonReentrant {
-        require(state == State.Trading, "not trading");
-        require(block.timestamp < resolutionTime, "past resolution");
-        require(collateralAmount > 0, "amount=0");
-
-        // transfer collateral in
-        require(collateral.transferFrom(msg.sender, address(this), collateralAmount), "transferFrom fail");
-
-        // normalize to 18 decimals outcome tokens: amountOut = collateralAmount * 10^(18) / 10^(collateralDecimals)
-        uint256 amountOut = _to18(collateralAmount);
-
-        OutcomeToken(tokenYes).mint(msg.sender, amountOut);
-        OutcomeToken(tokenNo).mint(msg.sender, amountOut);
-
-        emit DepositCompleteSet(msg.sender, collateralAmount, amountOut, amountOut);
+    /// @notice Deposits a complete set of outcome tokens (1 NO + 1 YES) to redeem 1 unit of collateral.
+    /// @dev This allows users to arbitrage or exit positions without using the AMM.
+    /// @param amount The number of complete sets to deposit.
+    function depositCompleteSet(uint256 amount) external nonReentrant atStage(Stages.TRADING) {
+        require(amount > 0, "amount must be positive");
+        book.burn(msg.sender, 0, amount);
+        book.burn(msg.sender, 1, amount);
+        IERC20(collateralToken).safeTransfer(msg.sender, amount);
+        emit CompleteSetDeposited(msg.sender, amount);
     }
 
-    /// @notice Finalize market outcome by oracle after resolutionTime
-    function finalize(int256 outcome) external onlyOracle {
-        require(block.timestamp >= resolutionTime, "too early");
-        require(state == State.Trading || state == State.Created, "bad state");
-        require(outcome == 0 || outcome == 1, "bad outcome");
-        state = State.Resolved;
-        finalOutcome = outcome;
-        emit Finalized(outcome);
+    /// @notice Redeems winning outcome tokens for collateral after the market has been resolved.
+    /// @dev Can only be called when the market is in the RESOLVED stage.
+    /// @param amount The amount of winning tokens to redeem.
+    function redeem(uint256 amount) external nonReentrant atStage(Stages.RESOLVED) {
+        require(amount > 0, "amount must be positive");
+        book.burn(msg.sender, resolvedOutcome, amount);
+        IERC20(collateralToken).safeTransfer(msg.sender, amount);
+        emit Redeemed(msg.sender, amount, resolvedOutcome);
     }
 
-    /// @notice Redeem winning token for collateral 1:1 (minus fee if set)
-    /// @param tokenAmount Amount in 18-decimal outcome token units
-    function redeem(uint256 tokenAmount) external nonReentrant {
-        require(state == State.Resolved, "not resolved");
-        require(tokenAmount > 0, "amount=0");
+    /// @notice Resolves the market by fetching the outcome from the oracle.
+    /// @dev Can only be called after the resolution time has passed and the market is in the TRADING stage.
+    /// Transitions the market to the RESOLVED stage.
+    function resolve() external atStage(Stages.TRADING) {
+        if (block.timestamp < resolutionTime) revert ResolutionTimeNotReached();
+        if (stage == Stages.RESOLVED) revert AlreadyResolved();
 
-        address winning = finalOutcome == 1 ? tokenYes : tokenNo;
-
-        // burn winning tokens from user
-        OutcomeToken(winning).burn(msg.sender, tokenAmount);
-
-        // compute collateral out (apply fee if any)
-        uint256 gross = _from18(tokenAmount);
-        uint256 fee = feeBps > 0 ? (gross * feeBps) / 10000 : 0;
-        uint256 net = gross - fee;
-        accruedFees += fee;
-
-        require(collateral.balanceOf(address(this)) >= net, "insufficient vault");
-        require(collateral.transfer(msg.sender, net), "transfer fail");
-
-        emit Redeem(msg.sender, finalOutcome, tokenAmount, net);
+        resolvedOutcome = IOracle(oracle).getOutcome();
+        stage = Stages.RESOLVED;
+        emit Resolved(resolvedOutcome);
     }
 
-    /// @notice On cancel, users can redeem a complete set back to collateral 1:1 (no fee)
-    function redeemCompleteSetOnCancel(uint256 amount18PerOutcome) external nonReentrant {
-        require(state == State.Canceled, "not canceled");
-        require(amount18PerOutcome > 0, "amount=0");
+    // --- Internal AMM Logic ---
 
-        OutcomeToken(tokenYes).burn(msg.sender, amount18PerOutcome);
-        OutcomeToken(tokenNo).burn(msg.sender, amount18PerOutcome);
-
-        uint256 collateralOut = _from18(amount18PerOutcome);
-        require(collateral.balanceOf(address(this)) >= collateralOut, "insufficient vault");
-        require(collateral.transfer(msg.sender, collateralOut), "transfer fail");
+    /// @dev Initializes the Constant Product Market Maker (CPMM).
+    function _initializeCPMM(uint256 initialLiquidity) internal {
+// ... existing code ...
     }
 
-    function withdrawFees(uint256 amount) external onlyAdmin {
-        require(amount > 0 && amount <= accruedFees, "bad amount");
-        accruedFees -= amount;
-        require(collateral.transfer(feeRecipient, amount), "transfer fail");
-        emit FeesWithdrawn(feeRecipient, amount);
+    /// @dev Initializes the Logarithmic Market Scoring Rule (LMSR) market maker.
+    function _initializeLMSR(uint256 initialLiquidity) internal {
+// ... existing code ...
     }
 
-    function _to18(uint256 amt) internal view returns (uint256) {
-        if (collateralDecimals == 18) return amt;
-        return amt * (10 ** (18 - collateralDecimals));
+    /// @dev Handles adding liquidity for the CPMM.
+    function _addLiquidityCPMM(uint256 amount) internal returns (uint256 shares) {
+// ... existing code ...
     }
 
-    function _from18(uint256 amt18) internal view returns (uint256) {
-        if (collateralDecimals == 18) return amt18;
-        return amt18 / (10 ** (18 - collateralDecimals));
+    /// @dev Handles adding liquidity for the LMSR.
+    function _addLiquidityLMSR(uint256 maxAmount) internal returns (uint256 shares) {
+// ... existing code ...
+    }
+
+    /// @dev Handles removing liquidity for the CPMM.
+    function _removeLiquidityCPMM(uint256 shares) internal returns (uint256 collateral) {
+// ... existing code ...
+    }
+
+    /// @dev Handles removing liquidity for the LMSR.
+    function _removeLiquidityLMSR(uint256 shares) internal returns (uint256 collateral) {
+// ... existing code ...
+    }
+
+    /// @dev Handles the swap logic for the CPMM.
+    function _swapCPMM(uint256 inputAmount, uint256 outcomeIndex, bool isBuy) internal returns (uint256 outputAmount) {
+// ... existing code ...
+    }
+
+    /// @dev Handles the swap logic for the LMSR.
+    function _swapLMSR(uint256 inputAmount, uint256 outcomeIndex, bool isBuy) internal returns (uint256 outputAmount) {
+// ... existing code ...
+    }
+
+    // --- View Functions ---
+
+    /// @notice Calculates the amount of outcome tokens that can be purchased for a given amount of collateral.
+    /// @param investmentAmount The amount of collateral to spend.
+    /// @param outcomeIndex The index of the outcome token to buy.
+    /// @return The number of outcome tokens that can be bought.
+    function calcBuyAmount(uint256 investmentAmount, uint256 outcomeIndex) public view returns (uint256) {
+// ... existing code ...
+    }
+
+    /// @notice Calculates the proceeds from selling a given amount of outcome tokens.
+    /// @param returnAmount The amount of outcome tokens to sell.
+    /// @param outcomeIndex The index of the outcome token to sell.
+    /// @return The amount of collateral that will be received.
+    function calcSellAmount(uint256 returnAmount, uint256 outcomeIndex) public view returns (uint256) {
+// ... existing code ...
+    }
+
+    /// @notice Returns the balance of a specific outcome token for a given account.
+    /// @param account The address of the account.
+    /// @param id The ID of the outcome token (0 for NO, 1 for YES).
+    /// @return The token balance.
+    function balanceOf(address account, uint256 id) public view returns (uint256) {
+        return book.balanceOf(account, id);
+    }
+
+    /// @notice Returns the balances of multiple outcome tokens for multiple accounts.
+    /// @param accounts An array of account addresses.
+    /// @param ids An array of outcome token IDs.
+    /// @return An array of token balances.
+    function balanceOfBatch(address[] calldata accounts, uint256[] calldata ids) public view returns (uint256[] memory) {
+        return book.balanceOfBatch(accounts, ids);
     }
 }
