@@ -1,6 +1,6 @@
 // 预测事件详情API路由 - 处理单个预测事件的GET请求
-import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin, type Prediction } from '@/lib/supabase';
+import { NextRequest, NextResponse } from "next/server";
+import { supabaseAdmin, type Prediction } from "@/lib/supabase";
 
 export async function GET(
   request: NextRequest,
@@ -12,7 +12,7 @@ export async function GET(
     // 验证ID参数
     if (!id || isNaN(parseInt(id))) {
       return NextResponse.json(
-        { success: false, message: '无效的预测事件ID' },
+        { success: false, message: "无效的预测事件ID" },
         { status: 400 }
       );
     }
@@ -21,30 +21,30 @@ export async function GET(
 
     // 查询预测事件详情
     const { data: prediction, error } = await supabaseAdmin
-      .from('predictions')
-      .select('*')
-      .eq('id', predictionId)
+      .from("predictions")
+      .select("*")
+      .eq("id", predictionId)
       .single();
 
     if (error) {
-      if ((error as any)?.code === 'PGRST116') {
+      if ((error as any)?.code === "PGRST116") {
         return NextResponse.json(
-          { success: false, message: '预测事件不存在' },
+          { success: false, message: "预测事件不存在" },
           { status: 404 }
         );
       }
-      console.error('获取预测事件详情失败:', error);
+      console.error("获取预测事件详情失败:", error);
       return NextResponse.json(
-        { success: false, message: '获取预测事件详情失败' },
+        { success: false, message: "获取预测事件详情失败" },
         { status: 500 }
       );
     }
 
     // 查询押注统计信息
     const { data: betsStats, error: betsError } = await supabaseAdmin
-      .from('bets')
-      .select('outcome, amount')
-      .eq('prediction_id', predictionId);
+      .from("bets")
+      .select("outcome, amount")
+      .eq("prediction_id", predictionId);
 
     let yesAmount = 0;
     let noAmount = 0;
@@ -54,11 +54,11 @@ export async function GET(
     if (!betsError && betsStats) {
       // 计算押注统计
       const uniqueParticipants = new Set();
-      
-      betsStats.forEach(bet => {
-        if (bet.outcome === 'yes') {
+
+      betsStats.forEach((bet) => {
+        if (bet.outcome === "yes") {
           yesAmount += bet.amount;
-        } else if (bet.outcome === 'no') {
+        } else if (bet.outcome === "no") {
           noAmount += bet.amount;
         }
         totalAmount += bet.amount;
@@ -67,14 +67,14 @@ export async function GET(
           uniqueParticipants.add((bet as any).user_id);
         }
       });
-      
+
       participantCount = uniqueParticipants.size;
     }
 
     // 计算当前概率（基于CPMM恒定乘积做市商模型）
     let yesProbability = 0;
     let noProbability = 0;
-    
+
     if (totalAmount > 0) {
       // 简单的概率计算：基于押注金额比例
       yesProbability = yesAmount / totalAmount;
@@ -105,30 +105,32 @@ export async function GET(
         participantCount,
         yesProbability: parseFloat(yesProbability.toFixed(4)),
         noProbability: parseFloat(noProbability.toFixed(4)),
-        betCount: betsStats?.length || 0
+        betCount: betsStats?.length || 0,
       },
       // 添加时间信息
       timeInfo: {
         createdAgo: getTimeAgo(prediction.created_at),
         deadlineIn: getTimeRemaining(prediction.deadline),
-        isExpired: new Date(prediction.deadline) < new Date()
-      }
+        isExpired: new Date(prediction.deadline) < new Date(),
+      },
     };
 
-    return NextResponse.json({
-      success: true,
-      data: predictionDetail,
-      message: '获取预测事件详情成功'
-    }, {
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8'
-      }
-    });
-    
-  } catch (error) {
-    console.error('获取预测事件详情异常:', error);
     return NextResponse.json(
-      { success: false, message: '获取预测事件详情失败' },
+      {
+        success: true,
+        data: predictionDetail,
+        message: "获取预测事件详情成功",
+      },
+      {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("获取预测事件详情异常:", error);
+    return NextResponse.json(
+      { success: false, message: "获取预测事件详情失败" },
       { status: 500 }
     );
   }
@@ -143,11 +145,11 @@ function getTimeAgo(timestamp: string): string {
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
 
-  if (diffMins < 1) return '刚刚';
+  if (diffMins < 1) return "刚刚";
   if (diffMins < 60) return `${diffMins}分钟前`;
   if (diffHours < 24) return `${diffHours}小时前`;
   if (diffDays < 30) return `${diffDays}天前`;
-  return '超过一个月前';
+  return "超过一个月前";
 }
 
 // 辅助函数：计算剩余时间
@@ -156,12 +158,12 @@ function getTimeRemaining(deadline: string): string {
   const end = new Date(deadline);
   const diffMs = end.getTime() - now.getTime();
 
-  if (diffMs <= 0) return '已截止';
+  if (diffMs <= 0) return "已截止";
 
   const diffDays = Math.floor(diffMs / 86400000);
   const diffHours = Math.floor((diffMs % 86400000) / 3600000);
 
   if (diffDays > 0) return `${diffDays}天${diffHours}小时后截止`;
   if (diffHours > 0) return `${diffHours}小时后截止`;
-  return '即将截止';
+  return "即将截止";
 }
