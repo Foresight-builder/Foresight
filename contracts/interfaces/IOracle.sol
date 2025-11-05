@@ -7,5 +7,5 @@ interface IOracle {
     /// @notice Returns the outcome of the market.
     /// @dev Should revert if the outcome is not yet available.
     /// @return The outcome of the market. -1 for invalid/undecided, 0 for NO, 1 for YES.
-    function getOutcome() external view returns (int256);
+    function getOutcome(bytes32 marketId) external view returns (uint256);
 }

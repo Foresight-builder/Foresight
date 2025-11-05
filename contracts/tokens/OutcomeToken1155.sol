@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC1155/ERC1155Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title OutcomeToken1155
 /// @notice Shared ERC1155 token contract for multiple markets and outcomes
 /// @dev Markets must be granted MINTER_ROLE to mint/burn users' outcome tokens
-contract OutcomeToken1155 is ERC1155, AccessControl {
+contract OutcomeToken1155 is Initializable, ERC1155Upgradeable, AccessControlUpgradeable, UUPSUpgradeable {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
-    constructor(string memory uri_) ERC1155(uri_) {
+    function initialize(string memory uri_) public initializer {
+        __ERC1155_init(uri_);
+        __AccessControl_init();
+        __UUPSUpgradeable_init();
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
@@ -48,7 +53,9 @@ contract OutcomeToken1155 is ERC1155, AccessControl {
         return (uint256(uint160(market)) << 32) | outcomeIndex;
     }
 
-    function supportsInterface(bytes4 interfaceId) public view virtual override(AccessControl, ERC1155) returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view virtual override(AccessControlUpgradeable, ERC1155Upgradeable) returns (bool) {
         return super.supportsInterface(interfaceId);
     }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }

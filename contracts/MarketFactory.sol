@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./interfaces/IMarket.sol";
 
@@ -10,11 +12,14 @@ import "./interfaces/IMarket.sol";
 /// @notice This factory contract is responsible for creating and managing prediction markets.
 /// @dev It uses a template-based approach with minimal proxies (clones) for gas efficiency.
 /// It maintains a registry of market templates and tracks all created markets.
-contract MarketFactory is AccessControl {
+contract MarketFactory is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     using Clones for address;
 
-    /// @notice The role identifier for administrators who can manage templates.
+    /// @notice The role identifier for administrators who can manage templates and fees.
     bytes32 public constant ADMIN_ROLE = DEFAULT_ADMIN_ROLE;
+
+    /// @dev The fixed address of the UMA Oracle contract.
+    address public umaOracle;
 
     /// @dev Represents a registered market template.
     struct Template {
@@ -46,14 +51,9 @@ contract MarketFactory is AccessControl {
     /// @notice A quick lookup mapping to verify if a market address was created by this factory.
     mapping(address => bool) public isMarketFromFactory;
 
-    // Fee management
+    // Fee management (controlled by ADMIN_ROLE)
     uint256 public feeBps; // Global fee in basis points
     address public feeTo; // Address to receive fees
-
-    // Governance-controlled fee changes
-    uint256 public pendingFeeBps;
-    address public pendingFeeTo;
-    uint256 public feeChangeTimestamp;
 
     /// @notice Emitted when a new market template is registered.
     event TemplateRegistered(bytes32 indexed templateId, address implementation, string name);
@@ -61,11 +61,8 @@ contract MarketFactory is AccessControl {
     /// @notice Emitted when a market template is removed.
     event TemplateRemoved(bytes32 indexed templateId);
 
-    /// @notice Emitted when a fee change is proposed.
-    event FeeChangeProposed(uint256 newFeeBps, address newFeeTo, uint256 effectiveTime);
-
-    /// @notice Emitted when a fee change is committed.
-    event FeeChangeCommitted(uint256 newFeeBps, address newFeeTo);
+    /// @notice Emitted when the fee structure is changed by an admin.
+    event FeeChanged(uint256 newFeeBps, address newFeeTo);
 
     /// @notice Emitted when a new market is created.
     event MarketCreated(
@@ -75,55 +72,37 @@ contract MarketFactory is AccessControl {
         address creator,
         address collateralToken,
         address oracle,
-        uint256 feeBps,
+        uint256 _feeBps,
         uint256 resolutionTime
     );
 
     /// @notice Contract constructor.
     /// @param admin The address to be granted the initial ADMIN_ROLE.
-    constructor(address admin) {
+    /// @param _umaOracle The address of the UMA Oracle contract.
+    function initialize(address admin, address _umaOracle) public initializer {
+        __AccessControl_init();
+        __UUPSUpgradeable_init();
+
         require(admin != address(0), "admin cannot be the zero address");
+        require(_umaOracle != address(0), "UMA oracle cannot be the zero address");
         _grantRole(ADMIN_ROLE, admin);
+        umaOracle = _umaOracle;
     }
 
-    /// @notice Transfers the ADMIN_ROLE to a new address.
-    /// @dev This function should be called after deployment to transfer admin rights to the Timelock contract.
-    /// Can only be called by the current admin.
-    /// @param newAdmin The address of the new admin (e.g., the Timelock contract).
-    function transferAdminRole(address newAdmin) external onlyRole(ADMIN_ROLE) {
-        require(newAdmin != address(0), "new admin cannot be the zero address");
-        _grantRole(ADMIN_ROLE, newAdmin);
-        _revokeRole(ADMIN_ROLE, msg.sender);
-    }
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
 
     // ----------------------
-    // Fee Management (Governance)
+    // Fee Management (Admin Controlled)
     // ----------------------
 
-    /// @notice Proposes a change to the fee structure.
-    /// @dev Can only be called by the admin (Timelock). The change can be committed after the delay.
+    /// @notice Sets the fee structure for the platform.
+    /// @dev Can only be called by the admin.
     /// @param newFeeBps The new fee in basis points.
     /// @param newFeeTo The new address to receive fees.
-    function proposeFeeChange(uint256 newFeeBps, address newFeeTo) external onlyRole(ADMIN_ROLE) {
-        pendingFeeBps = newFeeBps;
-        pendingFeeTo = newFeeTo;
-        feeChangeTimestamp = block.timestamp + 2 days; // Example delay
-        emit FeeChangeProposed(newFeeBps, newFeeTo, feeChangeTimestamp);
-    }
-
-    /// @notice Commits a pending fee change.
-    /// @dev Can be called by anyone after the effective time has passed.
-    function commitFeeChange() external {
-        require(block.timestamp >= feeChangeTimestamp, "fee change not yet effective");
-        require(feeChangeTimestamp != 0, "no pending fee change");
-
-        feeBps = pendingFeeBps;
-        feeTo = pendingFeeTo;
-
-        // Reset pending change
-        feeChangeTimestamp = 0;
-
-        emit FeeChangeCommitted(feeBps, feeTo);
+    function setFee(uint256 newFeeBps, address newFeeTo) external onlyRole(ADMIN_ROLE) {
+        feeBps = newFeeBps;
+        feeTo = newFeeTo;
+        emit FeeChanged(newFeeBps, newFeeTo);
     }
 
     // ----------------------
@@ -164,10 +143,10 @@ contract MarketFactory is AccessControl {
 
     /// @notice Creates a new prediction market by cloning a registered template.
     /// @dev This function deploys a minimal proxy (clone) of the template and initializes it.
+    /// It forces the use of the pre-configured UMA oracle.
     /// @param templateId The ID of the registered template to use.
     /// @param collateralToken The ERC20 token to be used as collateral.
-    /// @param oracle The address of the oracle contract that will resolve the market.
-    /// @param feeBps The trading fee for the market in basis points (1 bps = 0.01%).
+    /// @param _feeBps The trading fee for the market in basis points (1 bps = 0.01%).
     /// @param resolutionTime The Unix timestamp after which the market can be resolved.
     /// @param data ABI-encoded data specific to the template's initialization function.
     /// @return market The address of the newly created market.
@@ -175,36 +154,35 @@ contract MarketFactory is AccessControl {
     function createMarket(
         bytes32 templateId,
         address collateralToken,
-        address oracle,
-        uint256 feeBps,
+        uint256 _feeBps,
         uint256 resolutionTime,
         bytes calldata data
     ) external returns (address market, uint256 marketId) {
         Template memory t = templates[templateId];
         require(t.exists, "template does not exist");
         require(collateralToken != address(0), "collateralToken cannot be the zero address");
-        require(oracle != address(0), "oracle cannot be the zero address");
 
         market = t.implementation.clone();
 
+        marketId = ++marketCount;
+
         IMarket(market).initialize(
+            bytes32(marketId),
             address(this),
             msg.sender,
             collateralToken,
-            oracle,
-            feeBps,
+            umaOracle, // Force use of the UMA oracle
+            _feeBps,
             resolutionTime,
             data
         );
-
-        marketId = ++marketCount;
         markets[marketId] = MarketInfo({
             market: market,
             templateId: templateId,
             creator: msg.sender,
             collateralToken: collateralToken,
-            oracle: oracle,
-            feeBps: feeBps,
+            oracle: umaOracle, // Record the UMA oracle
+            feeBps: _feeBps,
             resolutionTime: resolutionTime
         });
         isMarketFromFactory[market] = true;
@@ -215,8 +193,8 @@ contract MarketFactory is AccessControl {
             templateId,
             msg.sender,
             collateralToken,
-            oracle,
-            feeBps,
+            umaOracle, // Emit the UMA oracle address
+            _feeBps,
             resolutionTime
         );
     }

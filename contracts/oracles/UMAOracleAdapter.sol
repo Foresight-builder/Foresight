@@ -49,7 +49,7 @@ interface IUmaOptimisticOracleV3 {
  * This contract implements the IOracle interface, allowing market contracts
  * to resolve outcomes based on UMA's decentralized oracle.
  */
-class UMAOracleAdapter is IOracle {
+contract UMAOracleAdapter is IOracle {
     address public immutable reporter;
     IUmaOptimisticOracleV3 public immutable umaOracle;
 
@@ -112,7 +112,7 @@ class UMAOracleAdapter is IOracle {
             // For this example, we'll assume a simple "1" for Yes and "0" for No.
             if (keccak256(assertion.claim) == keccak256(bytes("1"))) {
                 return 1; // Yes
-            } else if (keccak26(assertion.claim) == keccak256(bytes("0"))) {
+            } else if (keccak256(assertion.claim) == keccak256(bytes("0"))) {
                 return 0; // No
             }
         }
