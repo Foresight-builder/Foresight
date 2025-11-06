@@ -6,7 +6,6 @@ import { createPortal } from "react-dom";
 import { Copy, LogOut, Wallet, ExternalLink, ChevronDown } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
 import WalletModal from "./WalletModal";
-import { useAuth } from "@/contexts/AuthContext";
 
 export default function TopNavBar() {
   const pathname = usePathname();
@@ -24,7 +23,6 @@ export default function TopNavBar() {
     availableWallets,
     currentWalletType,
   } = useWallet();
-  const { user, signOut } = useAuth();
 
   const [mounted, setMounted] = useState(false);
   // 新增：头像菜单状态与复制状态
@@ -474,23 +472,15 @@ export default function TopNavBar() {
                 document.body
               )}
           </div>
-        ) : user ? (
-          <div className="relative flex items-center gap-3">
-            <div className="text-sm text-black">已登录：{user.email || "未绑定邮箱"}</div>
-            <button
-              onClick={async () => { await signOut(); }}
-              className="px-3 py-2 rounded-md border border-gray-300 text-black"
-            >退出</button>
-          </div>
         ) : (
           <div className="relative">
             <button
               onClick={() => setWalletModalOpen(true)}
               disabled={isConnecting}
               className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl active:scale-95 flex items-center gap-2"
-              title="连接钱包或邮箱登录"
+              title="连接钱包"
             >
-              {isConnecting ? "连接中..." : "连接 / 邮箱登录"}
+              {isConnecting ? "连接中..." : "连接钱包"}
               <Wallet className="w-4 h-4" />
             </button>
           </div>
