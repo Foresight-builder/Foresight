@@ -56,6 +56,7 @@ contract MultiOutcomeMarket1155 is AccessControl, ReentrancyGuard, IMarket {
     }
 
     function initialize(
+        bytes32 marketId,
         address factory_,
         address creator_,
         address collateralToken_,

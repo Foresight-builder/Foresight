@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-/// @notice Unified interface that different Market templates should implement
-/// @dev Factory clones templates and calls initialize with standardized params
 interface IMarket {
+    enum Stages {
+        TRADING,
+        RESOLVED
+    }
+
     /// @notice Initialize the market instance cloned by the factory
     /// @param factory The factory address that created this market
     /// @param creator The EOA or contract that requested market creation
@@ -13,6 +16,7 @@ interface IMarket {
     /// @param resolutionTime Unix timestamp after which the market can be finalized
     /// @param data Template-specific encoded params (e.g., outcome set, AMM config)
     function initialize(
+        bytes32 marketId,
         address factory,
         address creator,
         address collateralToken,

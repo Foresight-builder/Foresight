@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "../interfaces/IMarket.sol";
 import "../interfaces/IOracle.sol";
 import "../tokens/OutcomeToken1155.sol";
 import "../libs/AMM.sol";
 import "../libs/LMSRAMM.sol";
-import "../interfaces/IMarket.h";
-import "../interfaces/IOracle.h";
 
 /// @title BinaryMarket
 /// @author Foresight
@@ -23,33 +21,35 @@ import "../interfaces/IOracle.h";
 /// @dev It is designed to be used as a template for the MarketFactory and is deployed as a minimal proxy (clone).
 /// It supports both CPMM (Constant Product Market Maker) and LMSR (Logarithmic Market Scoring Rule) AMMs.
 /// It inherits from ReentrancyGuard to prevent re-entrancy attacks on critical functions.
-abstract contract BinaryMarket is IMarket, ReentrancyGuard {
-    using ERC1155 for ERC1155.Book;
+contract BinaryMarket is IMarket, ReentrancyGuard, Initializable {
+
     using SafeERC20 for IERC20;
 
     // --- Market State ---
 
+    bytes32 public marketId;
+
     /// @notice The factory that created this market.
-    address public immutable override factory;
+    address public factory;
     /// @notice The creator of this market.
-    address public immutable override creator;
+    address public creator;
     /// @notice The ERC20 token used for collateral and trading.
-    address public immutable override collateralToken;
+    address public collateralToken;
     /// @notice The oracle responsible for resolving the market outcome.
-    address public immutable override oracle;
+    address public oracle;
     /// @notice The trading fee in basis points (1 bps = 0.01%).
-    uint256 public immutable override feeBps;
+    uint256 public feeBps;
     /// @notice The timestamp when the market can be resolved.
-    uint256 public immutable override resolutionTime;
+    uint256 public resolutionTime;
 
     /// @notice The book of ERC1155 outcome tokens (ID 0 for NO, ID 1 for YES).
-    ERC1155.Book internal book;
+    OutcomeToken1155 public outcomeToken;
 
     /// @notice The total liquidity shares issued for the AMM pool.
     uint256 public liquidityShares;
 
     /// @notice The current stage of the market lifecycle.
-    Stages public stage;
+    IMarket.Stages public stage;
 
     /// @notice The resolved outcome of the market (0 for NO, 1 for YES, 2 for INVALID).
     uint256 public resolvedOutcome;
@@ -57,13 +57,13 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     // --- AMM State ---
 
     /// @notice The type of Automated Market Maker used by this market.
-    AMMType public ammType;
+    AMM.AMMType public ammType;
 
     /// @notice The state for the Constant Product Market Maker (CPMM).
-    CPMMData public cpmm;
+    AMM.CPMMData public cpmm;
 
     /// @notice The state for the Logarithmic Market Scoring Rule (LMSR) market maker.
-    LMSRData public lmsr;
+    AMM.LMSRData public lmsr;
 
     // --- Events ---
     /// @notice Emitted when the market is initialized.
@@ -98,7 +98,7 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     error InsufficientOutput();
 
     /// @dev Modifier to ensure a function is only callable when the market is in the TRADING stage.
-    modifier atStage(Stages _stage) {
+    modifier atStage(IMarket.Stages _stage) {
         if (stage != _stage) revert InvalidStage();
         _;
     }
@@ -114,6 +114,7 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @param _resolutionTime The timestamp for market resolution.
     /// @param data ABI-encoded initialization data, specific to the AMM type.
     function initialize(
+        bytes32 _marketId,
         address _factory,
         address _creator,
         address _collateralToken,
@@ -121,12 +122,19 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
         uint256 _feeBps,
         uint256 _resolutionTime,
         bytes calldata data
-    ) external override {
-        (ammType, initialLiquidity) = abi.decode(data, (AMMType, uint256));
+    ) external override initializer {
+        marketId = _marketId;
+        factory = _factory;
+        creator = _creator;
+        collateralToken = _collateralToken;
+        oracle = _oracle;
+        feeBps = _feeBps;
+        resolutionTime = _resolutionTime;
+        (AMM.AMMType _ammType, uint256 initialLiquidity) = abi.decode(data, (AMM.AMMType, uint256));
 
-        if (ammType == AMMType.CPMM) {
+        if (_ammType == AMM.AMMType.CPMM) {
             _initializeCPMM(initialLiquidity);
-        } else if (ammType == AMMType.LMSR) {
+        } else if (_ammType == AMM.AMMType.LMSR) {
             _initializeLMSR(initialLiquidity);
         } else {
             revert InvalidAMMType();
@@ -139,8 +147,8 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @dev Mints liquidity shares for the provider. The amount of collateral required depends on the AMM type.
     /// @param amount The amount of collateral to add. For CPMM, this is the exact amount. For LMSR, this is the maximum budget.
     /// @return shares The number of liquidity shares minted.
-    function addLiquidity(uint256 amount) external payable nonReentrant atStage(Stages.TRADING) returns (uint256 shares) {
-        if (ammType == AMMType.CPMM) {
+    function addLiquidity(uint256 amount) external payable nonReentrant atStage(IMarket.Stages.TRADING) returns (uint256 shares) {
+        if (ammType == AMM.AMMType.CPMM) {
             shares = _addLiquidityCPMM(amount);
         } else {
             shares = _addLiquidityLMSR(amount);
@@ -154,7 +162,7 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @dev Burns liquidity shares and returns a proportional amount of collateral and outcome tokens.
     /// @param shares The number of liquidity shares to burn.
     /// @return amount The amount of collateral returned to the provider.
-    function removeLiquidity(uint256 shares) external nonReentrant atStage(Stages.TRADING) returns (uint256 amount) {
+    function removeLiquidity(uint256 shares) external nonReentrant atStage(IMarket.Stages.TRADING) returns (uint256 amount) {
         require(shares > 0, "shares must be positive");
         // More logic here to transfer collateral and outcome tokens back to the provider
         // based on the share of the pool they owned.
@@ -162,7 +170,7 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
         
         liquidityShares -= shares;
 
-        if (ammType == AMMType.CPMM) {
+        if (ammType == AMM.AMMType.CPMM) {
             amount = _removeLiquidityCPMM(shares);
         } else {
             amount = _removeLiquidityLMSR(shares);
@@ -183,10 +191,10 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
         uint256 outcomeIndex,
         uint256 minOutputAmount,
         bool isBuy
-    ) external payable nonReentrant atStage(Stages.TRADING) returns (uint256 outputAmount) {
+    ) external payable nonReentrant atStage(IMarket.Stages.TRADING) returns (uint256 outputAmount) {
         if (outcomeIndex > 1) revert InvalidOutcomeIndex();
 
-        if (ammType == AMMType.CPMM) {
+        if (ammType == AMM.AMMType.CPMM) {
             outputAmount = _swapCPMM(inputAmount, outcomeIndex, isBuy);
         } else {
             outputAmount = _swapLMSR(inputAmount, outcomeIndex, isBuy);
@@ -200,10 +208,10 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @notice Deposits a complete set of outcome tokens (1 NO + 1 YES) to redeem 1 unit of collateral.
     /// @dev This allows users to arbitrage or exit positions without using the AMM.
     /// @param amount The number of complete sets to deposit.
-    function depositCompleteSet(uint256 amount) external nonReentrant atStage(Stages.TRADING) {
+    function depositCompleteSet(uint256 amount) external nonReentrant atStage(IMarket.Stages.TRADING) {
         require(amount > 0, "amount must be positive");
-        book.burn(msg.sender, 0, amount);
-        book.burn(msg.sender, 1, amount);
+        outcomeToken.burn(msg.sender, 0, amount);
+        outcomeToken.burn(msg.sender, 1, amount);
         IERC20(collateralToken).safeTransfer(msg.sender, amount);
         emit CompleteSetDeposited(msg.sender, amount);
     }
@@ -211,9 +219,9 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @notice Redeems winning outcome tokens for collateral after the market has been resolved.
     /// @dev Can only be called when the market is in the RESOLVED stage.
     /// @param amount The amount of winning tokens to redeem.
-    function redeem(uint256 amount) external nonReentrant atStage(Stages.RESOLVED) {
+    function redeem(uint256 amount) external nonReentrant atStage(IMarket.Stages.RESOLVED) {
         require(amount > 0, "amount must be positive");
-        book.burn(msg.sender, resolvedOutcome, amount);
+        outcomeToken.burn(msg.sender, resolvedOutcome, amount);
         IERC20(collateralToken).safeTransfer(msg.sender, amount);
         emit Redeemed(msg.sender, amount, resolvedOutcome);
     }
@@ -221,12 +229,12 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @notice Resolves the market by fetching the outcome from the oracle.
     /// @dev Can only be called after the resolution time has passed and the market is in the TRADING stage.
     /// Transitions the market to the RESOLVED stage.
-    function resolve() external atStage(Stages.TRADING) {
+    function resolve() external atStage(IMarket.Stages.TRADING) {
         if (block.timestamp < resolutionTime) revert ResolutionTimeNotReached();
-        if (stage == Stages.RESOLVED) revert AlreadyResolved();
+        if (stage == IMarket.Stages.RESOLVED) revert AlreadyResolved();
 
-        resolvedOutcome = IOracle(oracle).getOutcome();
-        stage = Stages.RESOLVED;
+        resolvedOutcome = IOracle(oracle).getOutcome(marketId);
+        stage = IMarket.Stages.RESOLVED;
         emit Resolved(resolvedOutcome);
     }
 
@@ -234,22 +242,39 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
 
     /// @dev Initializes the Constant Product Market Maker (CPMM).
     function _initializeCPMM(uint256 initialLiquidity) internal {
-// ... existing code ...
+        // For CPMM, initial liquidity is added via addLiquidity,
+        // which sets the initial reserves and k.
+        // The initialLiquidity parameter from initialize() is not directly used here.
+        // Reserves are implicitly 0.
     }
 
     /// @dev Initializes the Logarithmic Market Scoring Rule (LMSR) market maker.
     function _initializeLMSR(uint256 initialLiquidity) internal {
-// ... existing code ...
-    }
-
-    /// @dev Handles adding liquidity for the CPMM.
-    function _addLiquidityCPMM(uint256 amount) internal returns (uint256 shares) {
-// ... existing code ...
+        lmsr.b = initialLiquidity;
+        lmsr.netOutcomeTokensSold = new uint256[](2);
     }
 
     /// @dev Handles adding liquidity for the LMSR.
-    function _addLiquidityLMSR(uint256 maxAmount) internal returns (uint256 shares) {
-// ... existing code ...
+    function _addLiquidityLMSR(uint256 amount) internal returns (uint256 shares) {
+        uint256[] memory outcomeTokenAmounts = new uint256[](2);
+        outcomeTokenAmounts[0] = amount;
+        outcomeTokenAmounts[1] = amount;
+        uint256 cost = LMSRAMM.calcNetCost(lmsr.netOutcomeTokensSold, lmsr.b, outcomeTokenAmounts);
+        shares = cost;
+        lmsr.netOutcomeTokensSold[0] += amount;
+        lmsr.netOutcomeTokensSold[1] += amount;
+    }
+
+    /// @dev Handles adding liquidity for the LMSR.
+    function _addLiquidityCPMM(uint256 amount) internal returns (uint256 shares) {
+        (uint256 amount0, uint256 amount1) = (amount, amount);
+        outcomeToken.mint(address(this), 0, amount0);
+        outcomeToken.mint(address(this), 1, amount1);
+        uint256 liquidity = Math.sqrt(amount0 * amount1);
+        shares = liquidity;
+        cpmm.k = (cpmm.reserve0 + amount0) * (cpmm.reserve1 + amount1);
+        cpmm.reserve0 += amount0;
+        cpmm.reserve1 += amount1;
     }
 
     /// @dev Handles removing liquidity for the CPMM.
@@ -295,7 +320,7 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @param id The ID of the outcome token (0 for NO, 1 for YES).
     /// @return The token balance.
     function balanceOf(address account, uint256 id) public view returns (uint256) {
-        return book.balanceOf(account, id);
+        return outcomeToken.balanceOf(account, id);
     }
 
     /// @notice Returns the balances of multiple outcome tokens for multiple accounts.
@@ -303,6 +328,6 @@ abstract contract BinaryMarket is IMarket, ReentrancyGuard {
     /// @param ids An array of outcome token IDs.
     /// @return An array of token balances.
     function balanceOfBatch(address[] calldata accounts, uint256[] calldata ids) public view returns (uint256[] memory) {
-        return book.balanceOfBatch(accounts, ids);
+        return outcomeToken.balanceOfBatch(accounts, ids);
     }
 }

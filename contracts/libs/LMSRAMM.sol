@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
+import {ABDKMathQuad} from "abdk-libraries-solidity/ABDKMathQuad.sol";
 
 /// @title Logarithmic Market Scoring Rule (LMSR) AMM Library
 /// @author Gnosis, with modifications
@@ -9,10 +9,6 @@ import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 /// @dev This implementation is for a binary market (two outcomes).
 /// The math is heavily based on Gnosis' implementation and uses fixed-point arithmetic.
 library LMSRAMM {
-    using FixedPointMathLib for uint256;
-
-    uint256 private constant ONE = 1e18;
-
     /// @notice Calculates the cost of purchasing a number of outcome tokens.
     /// @param netOutcomeTokensSold An array containing the number of tokens sold for each outcome.
     /// @param b The liquidity parameter. A larger `b` corresponds to a deeper market.
@@ -28,46 +24,80 @@ library LMSRAMM {
         require(netOutcomeTokensSold.length == 2, "LMSRAMM: BINARY_MARKET_ONLY");
         require(outcomeIndex < 2, "LMSRAMM: INVALID_OUTCOME_INDEX");
 
-        uint256 exp_0 = (netOutcomeTokensSold[0] / b).exp();
-        uint256 exp_1 = (netOutcomeTokensSold[1] / b).exp();
+        bytes16 b_quad = ABDKMathQuad.fromUInt(b);
 
-        uint256 initialCost = (b * (exp_0 + exp_1).ln());
+        bytes16 exp_0 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(netOutcomeTokensSold[0]), b_quad));
+        bytes16 exp_1 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(netOutcomeTokensSold[1]), b_quad));
+
+        bytes16 initialCost_quad = ABDKMathQuad.mul(b_quad, ABDKMathQuad.ln(ABDKMathQuad.add(exp_0, exp_1)));
 
         uint256[] memory newNetOutcomeTokensSold = new uint256[](2);
         newNetOutcomeTokensSold[0] = netOutcomeTokensSold[0];
         newNetOutcomeTokensSold[1] = netOutcomeTokensSold[1];
         newNetOutcomeTokensSold[outcomeIndex] += amount;
 
-        uint256 new_exp_0 = (newNetOutcomeTokensSold[0] / b).exp();
-        uint256 new_exp_1 = (newNetOutcomeTokensSold[1] / b).exp();
+        bytes16 new_exp_0 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(newNetOutcomeTokensSold[0]), b_quad));
+        bytes16 new_exp_1 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(newNetOutcomeTokensSold[1]), b_quad));
 
-        uint256 newCost = (b * (new_exp_0 + new_exp_1).ln());
+        bytes16 newCost_quad = ABDKMathQuad.mul(b_quad, ABDKMathQuad.ln(ABDKMathQuad.add(new_exp_0, new_exp_1)));
 
-        cost = newCost - initialCost;
+        cost = ABDKMathQuad.toUInt(ABDKMathQuad.sub(newCost_quad, initialCost_quad));
     }
 
     /// @notice Calculates the net cost for a set of trades.
     /// @param netOutcomeTokensSold An array containing the number of tokens sold for each outcome.
     /// @param b The liquidity parameter.
-    /// @param outcomeTokenAmounts The amounts of each outcome token being traded.
-    /// @return netCost The net cost of the trades.
+    /// @param amounts An array containing the number of tokens to be bought for each outcome.
+    /// @return netCost The total cost of all trades.
     function calcNetCost(
         uint256[] memory netOutcomeTokensSold,
         uint256 b,
-        uint256[] memory outcomeTokenAmounts
+        uint256[] memory amounts
     ) internal pure returns (uint256 netCost) {
-        uint256 sumExp;
-        for (uint8 i = 0; i < netOutcomeTokensSold.length; i++) {
-            sumExp += ((netOutcomeTokensSold[i] + outcomeTokenAmounts[i]) / b).exp();
-        }
-        netCost = b * sumExp.ln();
+        require(netOutcomeTokensSold.length == 2 && amounts.length == 2, "LMSRAMM: BINARY_MARKET_ONLY");
+
+        bytes16 b_quad = ABDKMathQuad.fromUInt(b);
+
+        bytes16 exp_0 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(netOutcomeTokensSold[0]), b_quad));
+        bytes16 exp_1 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(netOutcomeTokensSold[1]), b_quad));
+
+        bytes16 initialCost_quad = ABDKMathQuad.mul(b_quad, ABDKMathQuad.ln(ABDKMathQuad.add(exp_0, exp_1)));
+
+        uint256[] memory newNetOutcomeTokensSold = new uint256[](2);
+        newNetOutcomeTokensSold[0] = netOutcomeTokensSold[0] + amounts[0];
+        newNetOutcomeTokensSold[1] = netOutcomeTokensSold[1] + amounts[1];
+
+        bytes16 new_exp_0 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(newNetOutcomeTokensSold[0]), b_quad));
+        bytes16 new_exp_1 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(newNetOutcomeTokensSold[1]), b_quad));
+
+        bytes16 newCost_quad = ABDKMathQuad.mul(b_quad, ABDKMathQuad.ln(ABDKMathQuad.add(new_exp_0, new_exp_1)));
+
+        netCost = ABDKMathQuad.toUInt(ABDKMathQuad.sub(newCost_quad, initialCost_quad));
     }
 
-    /// @notice Calculates the fee for the liquidity providers.
-    /// @param feeBps The fee in basis points (e.g., 30 for 0.3%).
-    /// @param cost The cost of the trade before fees.
-    /// @return fee The calculated fee.
-    function calcLiquidityProviderFee(uint256 feeBps, uint256 cost) internal pure returns (uint256 fee) {
-        fee = (cost * feeBps) / 10000;
+    /// @notice Calculates the price of a single outcome token.
+    /// @param netOutcomeTokensSold An array containing the number of tokens sold for each outcome.
+    /// @param b The liquidity parameter.
+    /// @param outcomeIndex The index of the outcome token.
+    /// @return price The price of the outcome token.
+    function calcPrice(
+        uint256[] memory netOutcomeTokensSold,
+        uint256 b,
+        uint8 outcomeIndex
+    ) internal pure returns (uint256 price) {
+        require(netOutcomeTokensSold.length == 2, "LMSRAMM: BINARY_MARKET_ONLY");
+        require(outcomeIndex < 2, "LMSRAMM: INVALID_OUTCOME_INDEX");
+
+        bytes16 b_quad = ABDKMathQuad.fromUInt(b);
+
+        bytes16 exp_0 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(netOutcomeTokensSold[0]), b_quad));
+        bytes16 exp_1 = ABDKMathQuad.exp(ABDKMathQuad.div(ABDKMathQuad.fromUInt(netOutcomeTokensSold[1]), b_quad));
+
+        bytes16 price_quad = ABDKMathQuad.div(
+            outcomeIndex == 0 ? exp_0 : exp_1,
+            ABDKMathQuad.add(exp_0, exp_1)
+        );
+
+        price = ABDKMathQuad.toUInt(price_quad);
     }
 }
