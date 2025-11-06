@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Mail, Wallet, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWallet } from "@/contexts/WalletContext";
@@ -76,8 +77,8 @@ export default function LoginModal({ open, onClose, defaultTab = "email" }: Logi
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50">
+  return createPortal(
+    <div className="fixed inset-0 z-[10000]">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
@@ -204,8 +205,9 @@ export default function LoginModal({ open, onClose, defaultTab = "email" }: Logi
       </div>
 
       {walletModalOpen && (
-        <WalletModal onClose={() => setWalletModalOpen(false)} />
+        <WalletModal isOpen={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
       )}
     </div>
+    , document.body
   );
 }

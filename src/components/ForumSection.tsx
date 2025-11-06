@@ -29,7 +29,7 @@ interface CommentView {
 }
 
 export default function ForumSection({ eventId }: ForumSectionProps) {
-  const { account, connectWallet, formatAddress } = useWallet()
+  const { account, connectWallet, formatAddress, siweLogin } = useWallet()
   const [threads, setThreads] = useState<ThreadView[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -133,7 +133,7 @@ export default function ForumSection({ eventId }: ForumSectionProps) {
           {!account ? (
             <div className="flex items-center justify-between">
               <div className="text-sm text-gray-600">发帖需连接钱包</div>
-              <button onClick={() => connectWallet()} className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl text-sm">连接钱包</button>
+              <button onClick={async () => { await connectWallet(); await siweLogin(); }} className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl text-sm">连接并签名</button>
             </div>
           ) : (
             <div className="space-y-2">

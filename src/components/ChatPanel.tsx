@@ -15,7 +15,7 @@ interface ChatMessageView {
 }
 
 export default function ChatPanel({ eventId }: ChatPanelProps) {
-  const { account, connectWallet, formatAddress } = useWallet()
+  const { account, connectWallet, formatAddress, siweLogin } = useWallet()
   const [messages, setMessages] = useState<ChatMessageView[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -143,10 +143,10 @@ export default function ChatPanel({ eventId }: ChatPanelProps) {
       {/* 输入区 */}
       <div className="p-3 border-t border-gray-100 bg-white relative">
         {!account ? (
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-600">发送消息需连接钱包</div>
-            <button onClick={() => connectWallet()} className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl text-sm">连接钱包</button>
-          </div>
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">发送消息需连接钱包</div>
+              <button onClick={async () => { await connectWallet(); await siweLogin(); }} className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl text-sm">连接并签名</button>
+            </div>
         ) : (
           <>
             {/* 快捷提示 */}

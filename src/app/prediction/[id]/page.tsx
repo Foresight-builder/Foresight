@@ -54,7 +54,7 @@ export default function PredictionDetailPage() {
   const [stakeSuccess, setStakeSuccess] = useState<string | null>(null);
 
   // 关注功能相关状态
-  const { account, connectWallet } = useWallet();
+  const { account, connectWallet, siweLogin } = useWallet();
   const [following, setFollowing] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
   const [followLoading, setFollowLoading] = useState(false);
@@ -241,6 +241,7 @@ export default function PredictionDetailPage() {
     if (!account) {
       try {
         await connectWallet();
+        await siweLogin();
       } catch (error) {
         setFollowError("钱包连接失败");
       }

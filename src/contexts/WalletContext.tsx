@@ -82,6 +82,8 @@ interface WalletContextType extends WalletState {
   formatAddress: (addr: string) => string;
   detectWallets: () => WalletInfo[];
   identifyWalletType: (provider?: any) => WalletType | null;
+  siweLogin: () => Promise<{ success: boolean; address?: string; error?: string }>;
+  refreshBalance: () => Promise<void>;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
@@ -111,19 +113,25 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // 检查 providers 数组中的真实钱包
     if (ethereum?.providers) {
       ethereum.providers.forEach((provider: any) => {
-        if (provider.isCoinbaseWallet) {
-          hasCB = true;
-        } else if (provider._metamask && provider.isMetaMask) {
-          hasMM = true; // 真正的 MetaMask 有 _metamask 属性
-        } else if (provider.isOkxWallet || provider.isOKExWallet) {
-          hasOKX = true; // OKX 钱包识别
-        } else if (provider.isMetaMask && !provider._metamask && !provider.isCoinbaseWallet && !provider.isOkxWallet) {
-          // 可能是 Binance 或其他钱包伪装的 MetaMask
-          hasBN = true;
-        }
+        const t = identifyWalletType(provider);
+        if (t === 'metamask') hasMM = true;
+        else if (t === 'coinbase') hasCB = true;
+        else if (t === 'binance') hasBN = true;
+        else if (t === 'okx') hasOKX = true;
       });
     }
     
+    // 融合 EIP-6963 发现到可用状态
+    if (discoveredProviders.length > 0) {
+      for (const d of discoveredProviders) {
+        const mapped = providerTypeMap.get(d.provider) || walletTypeFromInfo(d.info);
+        if (mapped === 'metamask') hasMM = true;
+        else if (mapped === 'coinbase') hasCB = true;
+        else if (mapped === 'binance') hasBN = true;
+        else if (mapped === 'okx') hasOKX = true;
+      }
+    }
+
     // 检查独立注入的钱包 - 增强OKX检测
     if ((window as any).BinanceChain) hasBN = true;
     if ((window as any).coinbaseWalletExtension) hasCB = true;
@@ -138,9 +146,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     
     // 如果没有 providers 但有 ethereum，检查主对象
     if (!ethereum?.providers && ethereum) {
-      if (ethereum._metamask && ethereum.isMetaMask) hasMM = true;
-      if (ethereum.isCoinbaseWallet) hasCB = true;
-      if (ethereum.isOkxWallet || ethereum.isOKExWallet) hasOKX = true;
+      const t = identifyWalletType(ethereum);
+      if (t === 'metamask') hasMM = true;
+      else if (t === 'coinbase') hasCB = true;
+      else if (t === 'binance') hasBN = true;
+      else if (t === 'okx') hasOKX = true;
+      // 兜底：显式属性检测
+      if (ethereum.isBinanceWallet) hasBN = true;
     }
   
     const wallets: WalletInfo[] = [
@@ -210,7 +222,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       
       // Binance 钱包识别 - 增强检测
-      if (p.isBinance || 
+      if (p.isBinanceWallet ||
+          p.isBinance || 
           p.bbcSignTx ||
           (p.constructor && p.constructor.name === 'BinanceWalletProvider') ||
           (p.isMetaMask && !p._metamask && !p.isCoinbaseWallet && !p.isOkxWallet)) {
@@ -260,10 +273,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
-  
+
+    let onAnnounce: any;
     if (typeof window !== 'undefined') {
-      window.addEventListener('eip6963:announceProvider', handleEIP6963Announce);
+      onAnnounce = (ev: any) => {
+        // 记录并更新可用钱包
+        handleEIP6963Announce(ev);
+        const updated = detectWallets();
+        const hasProvider = !!(window as any).ethereum || !!(window as any).BinanceChain || (Array.isArray((window as any).ethereum?.providers) && (window as any).ethereum.providers.length > 0) || discoveredProviders.length > 0;
+        setWalletState(prev => ({ ...prev, hasProvider, availableWallets: updated }));
+      };
+      window.addEventListener('eip6963:announceProvider', onAnnounce);
       window.dispatchEvent(new Event('eip6963:scan'));
+      // 注入可能有延迟，稍后再刷新一次检测结果
+      setTimeout(() => {
+        const updated = detectWallets();
+        const hasProvider = !!(window as any).ethereum || !!(window as any).BinanceChain || (Array.isArray((window as any).ethereum?.providers) && (window as any).ethereum.providers.length > 0) || discoveredProviders.length > 0;
+        setWalletState(prev => ({ ...prev, hasProvider, availableWallets: updated }));
+      }, 200);
     }
 
     const availableWallets = detectWallets();
@@ -307,8 +334,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     checkConnection();
 
     return () => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('eip6963:announceProvider', handleEIP6963Announce);
+      if (typeof window !== 'undefined' && onAnnounce) {
+        window.removeEventListener('eip6963:announceProvider', onAnnounce);
       }
     };
   }, []);
@@ -319,6 +346,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         ...prev, 
         account: accounts[0] 
       }));
+      // 账户切换后刷新余额
+      _refreshBalance(accounts[0]);
     } else {
       // 账户被断开，清除状态
       setWalletState(prev => ({ 
@@ -341,6 +370,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (p && p.on) {
       p.on('accountsChanged', handleAccountsChanged);
       p.on('chainChanged', handleChainChanged);
+    }
+  };
+
+  // 内部余额刷新实现，支持覆盖地址以避免状态时序问题
+  const _refreshBalance = async (addressOverride?: string) => {
+    try {
+      const rawProvider = currentProviderRef.current || (window as any).ethereum || (window as any).BinanceChain;
+      const address = addressOverride || walletState.account;
+      if (!rawProvider || !address) return;
+      setWalletState(prev => ({ ...prev, balanceLoading: true }));
+      const provider = new ethers.BrowserProvider(rawProvider);
+      const bal = await provider.getBalance(address);
+      const eth = Number(ethers.formatEther(bal));
+      const display = eth >= 0.0001 ? eth.toFixed(4) : eth.toFixed(6);
+      setWalletState(prev => ({ ...prev, balanceEth: display, balanceLoading: false }));
+    } catch (e) {
+      setWalletState(prev => ({ ...prev, balanceLoading: false }));
+      console.error('刷新余额失败:', e);
     }
   };
 
@@ -374,22 +421,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // 在 providers 数组中查找目标钱包
         else if (ethereum?.providers) {
           for (const provider of ethereum.providers) {
-            if (walletType === 'metamask' && provider._metamask && provider.isMetaMask) {
-              targetProvider = provider;
-              break;
-            }
-            if (walletType === 'coinbase' && provider.isCoinbaseWallet) {
-              targetProvider = provider;
-              break;
-            }
-            if (walletType === 'okx' && (provider.isOkxWallet || provider.isOKExWallet)) {
-              targetProvider = provider;
-              break;
-            }
-            if (walletType === 'binance' && provider.isMetaMask && !provider._metamask && !provider.isCoinbaseWallet && !provider.isOkxWallet) {
-              targetProvider = provider;
-              break;
-            }
+            const t = identifyWalletType(provider);
+            if (walletType === 'metamask' && t === 'metamask') { targetProvider = provider; break; }
+            if (walletType === 'coinbase' && t === 'coinbase') { targetProvider = provider; break; }
+            if (walletType === 'okx' && t === 'okx') { targetProvider = provider; break; }
+            if (walletType === 'binance' && (t === 'binance' || provider.isBinanceWallet)) { targetProvider = provider; break; }
           }
         }
         // 检查独立注入的钱包
@@ -451,24 +487,30 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (accounts && accounts.length > 0) {
         const provider = new ethers.BrowserProvider(targetProvider);
         const network = await provider.getNetwork();
+        const hexChainId = (typeof network.chainId === 'bigint')
+          ? '0x' + network.chainId.toString(16)
+          : (ethers.toBeHex as any)?.(network.chainId) ?? ('0x' + Number(network.chainId).toString(16));
   
         const actualWalletType = identifyWalletType(targetProvider);
   
         setWalletState(prev => ({
           ...prev,
           account: accounts[0],
-          chainId: network.chainId.toString(),
+          chainId: hexChainId,
           isConnecting: false,
           currentWalletType: actualWalletType || walletType || null,
         }));
-  
+
         // 保存当前 provider 引用
         currentProviderRef.current = targetProvider;
         setupEventListeners(targetProvider);
-  
+
         if (typeof window !== 'undefined') {
           sessionStorage.removeItem(LOGOUT_FLAG);
         }
+
+        // 连接后立即刷新余额
+        await _refreshBalance(accounts[0]);
       }
     } catch (error: any) {
       console.error('连接钱包失败:', error);
@@ -514,6 +556,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           }
         } catch (disconnectError) {
           console.log('钱包断开连接失败:', disconnectError);
+        }
+        
+        // 进一步：遍历所有已注入的 providers（EIP-6963），尽可能撤销权限
+        try {
+          const ethereum: any = (typeof window !== 'undefined') ? (window as any).ethereum : null;
+          if (ethereum?.providers && Array.isArray(ethereum.providers)) {
+            for (const pr of ethereum.providers) {
+              if (typeof pr?.request === 'function') {
+                try {
+                  await pr.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] });
+                } catch {}
+              }
+              if (typeof pr?.disconnect === 'function') {
+                try { await pr.disconnect(); } catch {}
+              }
+            }
+          } else if (ethereum && typeof ethereum.request === 'function') {
+            try { await ethereum.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] }); } catch {}
+          }
+        } catch (e) {
+          console.log('遍历 providers 撤销权限失败:', e);
         }
         
         // 移除事件监听器
@@ -577,6 +640,76 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const formatAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 
+  // 触发 SIWE 签名登录（第二步）
+  const siweLogin = async (): Promise<{ success: boolean; address?: string; error?: string }> => {
+    try {
+      const rawProvider = currentProviderRef.current || (window as any).ethereum || (window as any).BinanceChain;
+      if (!rawProvider) {
+        return { success: false, error: '钱包 provider 不可用' };
+      }
+
+      // 使用 ethers 获取地址与网络，避免依赖状态刷新时序
+      const browserProvider = new ethers.BrowserProvider(rawProvider);
+      const signer = await browserProvider.getSigner();
+      const signerAddress = await signer.getAddress().catch(() => null);
+      const net = await browserProvider.getNetwork();
+      const address = signerAddress || walletState.account;
+      if (!address) return { success: false, error: '请先连接钱包' };
+
+      // 获取 nonce
+      const nonceRes = await fetch('/api/siwe/nonce', { method: 'GET' });
+      const nonceJson = await nonceRes.json();
+      const nonce: string = nonceJson?.nonce;
+      if (!nonce) return { success: false, error: '无法获取 nonce' };
+
+      // 组装 SIWE 消息
+      const { SiweMessage } = await import('siwe');
+      const chainIdNum = Number(net?.chainId?.toString?.() || walletState.chainId || '1');
+      const message = new SiweMessage({
+        domain: typeof window !== 'undefined' ? window.location.host : 'localhost',
+        address,
+        statement: 'Welcome to Foresight! Sign to connect.',
+        uri: typeof window !== 'undefined' ? window.location.origin : 'http://localhost',
+        version: '1',
+        chainId: Number.isFinite(chainIdNum) ? chainIdNum : 1,
+        nonce,
+      });
+      const prepared = message.prepareMessage();
+
+      // 触发签名（带降级兜底）
+      let signature: string;
+      try {
+        signature = await signer.signMessage(prepared);
+      } catch (signErr) {
+        // 兼容部分钱包对 personal_sign 的参数顺序差异
+        if (typeof (rawProvider as any)?.request === 'function') {
+          try {
+            signature = await (rawProvider as any).request({ method: 'personal_sign', params: [prepared, address] });
+          } catch (_) {
+            signature = await (rawProvider as any).request({ method: 'personal_sign', params: [address, prepared] });
+          }
+        } else {
+          throw signErr;
+        }
+      }
+
+      // 服务端校验
+      const verifyRes = await fetch('/api/siwe/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: prepared, signature, domain: typeof window !== 'undefined' ? window.location.host : undefined, uri: typeof window !== 'undefined' ? window.location.origin : undefined })
+      });
+      const verifyJson = await verifyRes.json();
+      if (!verifyRes.ok || !verifyJson?.success) {
+        return { success: false, error: verifyJson?.message || '签名验证失败' };
+      }
+
+      return { success: true, address };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'SIWE 登录失败' };
+    }
+  };
+
   const contextValue: WalletContextType = {
     ...walletState,
     connectWallet,
@@ -584,6 +717,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     formatAddress,
     detectWallets,
     identifyWalletType,
+    siweLogin,
+    refreshBalance: () => _refreshBalance(),
   };
 
   if (!mounted) {

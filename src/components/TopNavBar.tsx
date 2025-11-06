@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { Copy, LogOut, Wallet, ExternalLink, ChevronDown } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
 import { useAuth } from "@/contexts/AuthContext";
-import LoginModal from "./LoginModal";
+import WalletModal from "./WalletModal";
 
 export default function TopNavBar() {
   const pathname = usePathname();
@@ -18,6 +18,7 @@ export default function TopNavBar() {
     chainId,
     balanceEth,
     balanceLoading,
+    refreshBalance,
     connectWallet,
     disconnectWallet,
     formatAddress,
@@ -32,7 +33,6 @@ export default function TopNavBar() {
   const [copied, setCopied] = useState(false);
   const [walletSelectorOpen, setWalletSelectorOpen] = useState(false);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const walletSelectorRef = useRef<HTMLDivElement | null>(null);
   // 新增：用于菜单定位与门户内点击判断
@@ -77,6 +77,7 @@ export default function TopNavBar() {
 
   const handleDisconnectWallet = async () => {
     await disconnectWallet();
+    try { await fetch('/api/siwe/logout', { method: 'GET' }); } catch {}
     setMenuOpen(false);
   };
 
@@ -127,20 +128,8 @@ export default function TopNavBar() {
   };
 
   const updateNetworkInfo = async () => {
-    const ethereum =
-      typeof window !== "undefined" ? window.ethereum : undefined;
-    if (!ethereum || !account) return;
-    try {
-      const cid: string = await ethereum.request({ method: "eth_chainId" });
-      const balHex: string = await ethereum.request({
-        method: "eth_getBalance",
-        params: [account, "latest"],
-      });
-      const balDec = parseInt(balHex, 16);
-      const eth = balDec / 1e18;
-    } catch (e) {
-      console.error("Fetch balance failed:", e);
-    }
+    // 统一使用 WalletContext 的 refreshBalance，以避免状态不一致
+    await refreshBalance();
   };
 
   useEffect(() => {
@@ -479,14 +468,18 @@ export default function TopNavBar() {
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-700">已登录：{user.email || "未绑定邮箱"}</span>
             <button
-              onClick={async () => { await signOut(); }}
+              onClick={async () => { 
+                await signOut(); 
+                await disconnectWallet(); 
+                try { await fetch('/api/siwe/logout', { method: 'GET' }); } catch {} 
+              }}
               className="px-3 py-1.5 bg-gray-100 text-gray-900 rounded-xl hover:bg-gray-200"
             >退出</button>
           </div>
         ) : (
           <div className="relative">
             <button
-              onClick={() => setLoginModalOpen(true)}
+              onClick={() => setWalletModalOpen(true)}
               className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl active:scale-95"
               title="登录"
             >
@@ -498,9 +491,9 @@ export default function TopNavBar() {
 
       {mounted && modal && createPortal(modal, document.body)}
       
-      {/* 登录弹窗（邮箱 + 钱包） */}
+      {/* 一体化钱包选择器（包含邮箱登录） */}
       {mounted && (
-        <LoginModal open={loginModalOpen} onClose={() => setLoginModalOpen(false)} defaultTab="email" />
+        <WalletModal isOpen={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
       )}
     </nav>
   );

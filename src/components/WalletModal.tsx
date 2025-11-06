@@ -2,7 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useWallet } from '@/contexts/WalletContext';
+import { useAuthOptional } from '@/contexts/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Mail, Loader2 } from 'lucide-react';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -10,9 +12,16 @@ interface WalletModalProps {
 }
 
 const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
-  const { connectWallet, availableWallets, isConnecting } = useWallet();
+  const { connectWallet, availableWallets, isConnecting, siweLogin } = useWallet();
+  const auth = useAuthOptional();
+  const user = auth?.user ?? null;
   const [selectedWallet, setSelectedWallet] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [email, setEmail] = useState("");
+  const [otpRequested, setOtpRequested] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [siweLoading, setSiweLoading] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -31,18 +40,66 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
     };
   }, [isOpen]);
 
-  if (!isOpen || !mounted) return null;
+  // 登录成功后自动关闭（需在任何条件返回之前声明，保证 Hook 顺序稳定）
+  useEffect(() => {
+    if (!isOpen) return;
+    if (user) {
+      onClose();
+    }
+  }, [user, isOpen, onClose]);
+
+  // 仅在未挂载时返回 null，避免 SSR/水合阶段的 Portal 问题，同时不影响 Hook 顺序
+  if (!mounted) return null;
 
   const handleWalletConnect = async (walletType: string) => {
     setSelectedWallet(walletType);
     try {
       await connectWallet(walletType as any);
+      // 连接成功后触发 SIWE 签名登录
+      setSiweLoading(true);
+      const res = await siweLogin();
+      setSiweLoading(false);
+      if (!res.success) {
+        console.error('签名登录失败:', res.error);
+      }
       onClose();
     } catch (error) {
       console.error('连接钱包失败:', error);
     } finally {
       setSelectedWallet(null);
     }
+  };
+
+  const canRequest = /.+@.+\..+/.test(email);
+
+  const handleRequestOtp = async () => {
+    if (!canRequest || !auth) return;
+    setEmailLoading(true);
+    try {
+      await auth.requestEmailOtp(email);
+      setOtpRequested(true);
+    } catch {}
+    setEmailLoading(false);
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!email || !otp || !auth) return;
+    setEmailLoading(true);
+    try {
+      await auth.verifyEmailOtp(email, otp);
+      onClose();
+    } catch {}
+    setEmailLoading(false);
+  };
+
+  const handleSendMagicLink = async () => {
+    if (!canRequest || !auth) return;
+    setEmailLoading(true);
+    try {
+      await auth.sendMagicLink(email);
+      setOtpRequested(true);
+    } catch {}
+    setEmailLoading(false);
   };
 
   const walletIcons = {
@@ -132,8 +189,8 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
                   </svg>
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">连接钱包</h2>
-                  <p className="text-sm text-gray-500">选择您的钱包进行连接</p>
+                  <h2 className="text-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">登录 Foresight</h2>
+                  <p className="text-sm text-gray-500">使用邮箱或选择钱包继续</p>
                 </div>
               </div>
               <motion.button
@@ -148,8 +205,80 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
               </motion.button>
             </div>
 
+            {/* 邮箱登录 */}
+            <div className="relative p-6 space-y-4">
+              {!otpRequested ? (
+                <div className="space-y-3">
+                  <label className="block text-sm font-medium text-gray-700">邮箱地址</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-600"
+                  />
+                  {auth?.error && <div className="text-sm text-red-600">{auth.error}</div>}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleRequestOtp}
+                      disabled={!canRequest || emailLoading}
+                      className="inline-flex items-center gap-2 rounded-md bg-purple-600 px-4 py-2 text-white disabled:opacity-60"
+                    >
+                      {emailLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                      发送验证码
+                    </button>
+                    <button
+                      onClick={handleSendMagicLink}
+                      disabled={!canRequest || emailLoading}
+                      className="inline-flex items-center gap-2 rounded-md bg-gray-100 px-4 py-2 text-gray-900 disabled:opacity-60"
+                    >
+                      发送登录链接
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-600">我们已向 <span className="font-medium">{email}</span> 发送邮件。</p>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+                    className="tracking-widest text-center text-lg w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-600"
+                    placeholder="••••••"
+                  />
+                  {auth?.error && <div className="text-sm text-red-600">{auth.error}</div>}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleVerifyOtp}
+                      disabled={otp.length !== 6 || emailLoading}
+                      className="inline-flex items-center gap-2 rounded-md bg-purple-600 px-4 py-2 text-white disabled:opacity-60"
+                    >
+                      {emailLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                      验证并登录
+                    </button>
+                    <button
+                      onClick={handleRequestOtp}
+                      disabled={emailLoading}
+                      className="inline-flex items-center gap-2 rounded-md bg-gray-100 px-4 py-2 text-gray-900"
+                    >
+                      重新发送
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* 分隔符 */}
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-gradient-to-r from-purple-200 to-pink-200" />
+                <span className="text-xs text-gray-500">或</span>
+                <div className="h-px flex-1 bg-gradient-to-r from-pink-200 to-purple-200" />
+              </div>
+            </div>
+
             {/* 钱包列表 */}
-            <div className="relative p-6 space-y-3">
+            <div className="relative px-6 pb-6 space-y-3">
               {availableWallets.map((wallet, index) => (
                 <motion.button
                   key={wallet.type}
@@ -189,7 +318,7 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
                   </div>
                   
                   <div className="relative">
-                    {selectedWallet === wallet.type && isConnecting ? (
+                    {selectedWallet === wallet.type && (isConnecting || siweLoading) ? (
                       <div className="animate-spin rounded-full h-6 w-6 border-2 border-purple-500 border-t-transparent" />
                     ) : wallet.isAvailable ? (
                       <div className="w-6 h-6 rounded-full border-2 border-purple-300 group-hover:border-purple-500 transition-colors duration-300 flex items-center justify-center">

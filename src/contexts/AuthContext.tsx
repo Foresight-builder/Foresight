@@ -129,3 +129,8 @@ export function useAuth() {
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }
+
+// 可选版本：在缺少 Provider 时返回 undefined，避免组件直接崩溃
+export function useAuthOptional() {
+  return useContext(AuthContext);
+}
