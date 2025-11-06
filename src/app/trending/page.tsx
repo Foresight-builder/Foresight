@@ -28,9 +28,16 @@ import { supabase } from "@/lib/supabase";
 
 export default function TrendingPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasWorkerRef = useRef<Worker | null>(null);
+  const offscreenActiveRef = useRef<boolean>(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const mainContentRef = useRef<HTMLDivElement | null>(null);
+
+  // 展示模式：分页 或 滚动（默认分页以避免长列表缓慢下滑）
+  const [viewMode, setViewMode] = useState<'paginate' | 'scroll'>('paginate');
+  const [page, setPage] = useState(0);
+  const pageSize = 12;
 
   // 侧边栏数据
   const sidebarData = {
@@ -166,23 +173,49 @@ export default function TrendingPage() {
   
   // 返回顶部功能状态
   const [showBackToTop, setShowBackToTop] = useState(false);
+  const isScrollingRef = useRef(false);
+  const scrollStopTimerRef = useRef<number | null>(null);
 
   // 滚动监听 - 显示/隐藏返回顶部按钮
   useEffect(() => {
-    const handleScroll = () => {
+    let rafId = 0;
+    const update = () => {
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
       setShowBackToTop(scrollTop > 300);
-      
-      // 计算滚动进度
       const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
       const progress = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
       setScrollProgress(progress);
+      rafId = 0;
+    };
+
+    const handleScroll = () => {
+      // 标记滚动中，供画布动画降级用
+      isScrollingRef.current = true;
+      if (scrollStopTimerRef.current) {
+        clearTimeout(scrollStopTimerRef.current);
+      }
+      scrollStopTimerRef.current = window.setTimeout(() => {
+        isScrollingRef.current = false;
+        // 通知 Worker 滚动结束
+        canvasWorkerRef.current?.postMessage({ type: 'scrolling', isScrolling: false });
+      }, 120);
+
+      // 通知 Worker 正在滚动
+      canvasWorkerRef.current?.postMessage({ type: 'scrolling', isScrolling: true });
+      // 将读写合并到下一帧，降低reflow频率
+      if (!rafId) {
+        rafId = requestAnimationFrame(update);
+      }
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll(); // 初始化检查
+    update(); // 初始化检查
 
-    return () => window.removeEventListener('scroll', handleScroll);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (rafId) cancelAnimationFrame(rafId);
+      if (scrollStopTimerRef.current) clearTimeout(scrollStopTimerRef.current);
+    };
   }, []);
 
   // 返回顶部函数
@@ -639,6 +672,67 @@ export default function TrendingPage() {
     }, 1200);
   };
 
+  // 卡片点击：在鼠标点击位置生成对应分类颜色的粒子（比分类按钮略大）
+  const createCategoryParticlesAtCardClick = (event: React.MouseEvent, category?: string) => {
+    const x = event.clientX;
+    const y = event.clientY;
+
+    // 映射分类到颜色
+    const color = category === '科技'
+      ? '#3B82F6'
+      : category === '娱乐'
+      ? '#EC4899'
+      : category === '时政'
+      ? '#8B5CF6'
+      : category === '天气'
+      ? '#10B981'
+      : '#8B5CF6';
+
+    // 粒子容器
+    const particlesContainer = document.createElement('div');
+    particlesContainer.className = 'fixed pointer-events-none z-[9999]';
+    particlesContainer.style.left = '0';
+    particlesContainer.style.top = '0';
+    particlesContainer.style.width = '100vw';
+    particlesContainer.style.height = '100vh';
+    document.body.appendChild(particlesContainer);
+
+    // 比分类按钮略大的爱心粒子
+    const particleCount = 12; // 稍多于分类按钮的 8 个
+    const particles: HTMLDivElement[] = [];
+    for (let i = 0; i < particleCount; i++) {
+      const particle = document.createElement('div');
+      particle.className = 'absolute w-4 h-4'; // 比分类按钮 w-3 h-3 略大
+      particle.style.background = color;
+      particle.style.left = `${x}px`;
+      particle.style.top = `${y}px`;
+      particle.style.transform = 'translate(-50%, -50%)';
+      particle.style.clipPath = 'polygon(50% 15%, 61% 0, 75% 0, 85% 15%, 100% 35%, 100% 50%, 85% 65%, 75% 100%, 50% 85%, 25% 100%, 15% 65%, 0 50%, 0 35%, 15% 15%, 25% 0, 39% 0)';
+      particlesContainer.appendChild(particle);
+      particles.push(particle);
+    }
+
+    // 动画：更大的扩散半径与更快收敛，减少重绘时间
+    particles.forEach((particle, index) => {
+      const angle = (index / particleCount) * Math.PI * 2 + Math.random() * 0.3;
+      const distance = 80 + Math.random() * 60; // 比分类按钮更远
+      const duration = 700 + Math.random() * 300; // 稍快一些
+
+      const targetX = x + Math.cos(angle) * distance;
+      const targetY = y - Math.abs(Math.sin(angle)) * distance * 1.4;
+
+      particle.animate(
+        [
+          { transform: 'translate(-50%, -50%) scale(1) rotate(0deg)', opacity: 1 },
+          { transform: `translate(${targetX - x}px, ${targetY - y}px) scale(0.35) rotate(${Math.random() * 360}deg)`, opacity: 0 }
+        ],
+        { duration, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' }
+      );
+    });
+
+    setTimeout(() => { particlesContainer.remove(); }, 1200);
+  };
+
   // 自动轮播效果
   useEffect(() => {
     const interval = setInterval(() => {
@@ -728,7 +822,13 @@ export default function TrendingPage() {
   }, [sortOpen]);
 
   // 无限滚动功能
+  const displayCountRef = useRef(displayCount);
+  const totalEventsCountRef = useRef(totalEventsCount);
+  const loadingMoreRef = useRef(false);
+  useEffect(() => { displayCountRef.current = displayCount; }, [displayCount]);
+  useEffect(() => { totalEventsCountRef.current = totalEventsCount; }, [totalEventsCount]);
   useEffect(() => {
+    if (viewMode !== 'scroll') return;
     const handleScroll = () => {
       // 检查是否滚动到底部
       const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -737,27 +837,92 @@ export default function TrendingPage() {
       
       // 当距离底部小于100px时加载更多
       if (scrollTop + clientHeight >= scrollHeight - 100) {
-        // 使用totalEventsCount作为总事件数
-        if (displayCount < totalEventsCount) {
-          setDisplayCount(prevCount => Math.min(prevCount + 6, totalEventsCount));
+        const current = displayCountRef.current;
+        const total = totalEventsCountRef.current;
+        if (!loadingMoreRef.current && current < total) {
+          loadingMoreRef.current = true;
+          setDisplayCount(prev => Math.min(prev + 6, total));
+          setTimeout(() => { loadingMoreRef.current = false; }, 300);
         }
       }
     };
 
     // 添加滚动监听
-    window.addEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll, { passive: true });
     
     // 清理函数
     return () => {
       window.removeEventListener('scroll', handleScroll);
     };
-  }, [displayCount, totalEventsCount]);
+  }, [displayCount, totalEventsCount, viewMode]);
  
   useEffect(() => {
-    const maybeCanvas = canvasRef.current;
-    if (!maybeCanvas) return;
-    const canvasEl = maybeCanvas;
-    const context = canvasEl.getContext("2d");
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    const supportsOffscreen = typeof (canvasEl as any).transferControlToOffscreen === 'function' && typeof Worker !== 'undefined';
+    if (supportsOffscreen) {
+      // OffscreenCanvas + Worker 路线（长期最佳）
+      let worker: Worker | null = null;
+      try {
+        worker = new Worker(new URL('../../workers/particles.worker.ts', import.meta.url), { type: 'module' });
+      } catch (err) {
+        console.warn('Worker 初始化失败，回退到主线程绘制:', err);
+      }
+      if (worker) {
+        canvasWorkerRef.current = worker;
+        let offscreen: OffscreenCanvas | null = null;
+        try {
+          offscreen = (canvasEl as any).transferControlToOffscreen();
+        } catch (err) {
+          console.warn('transferControlToOffscreen 失败，回退到主线程绘制:', err);
+        }
+        if (offscreen) {
+          const init = () => {
+            const dpr = window.devicePixelRatio || 1;
+            worker!.postMessage({ type: 'init', canvas: offscreen!, width: window.innerWidth, height: window.innerHeight, dpr }, [offscreen!]);
+          };
+          init();
+          const onResize = () => {
+            const dpr = window.devicePixelRatio || 1;
+            worker!.postMessage({ type: 'resize', width: window.innerWidth, height: window.innerHeight, dpr });
+          };
+          const onMouseMove = (e: MouseEvent) => {
+            const rect = canvasEl.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            worker!.postMessage({ type: 'mouse', x, y, active: true });
+          };
+          const onMouseLeave = () => { worker!.postMessage({ type: 'mouse', x: 0, y: 0, active: false }); };
+          window.addEventListener('resize', onResize);
+          window.addEventListener('mousemove', onMouseMove);
+          window.addEventListener('mouseleave', onMouseLeave);
+          // 初始滚动状态同步
+          worker!.postMessage({ type: 'scrolling', isScrolling: false });
+          // 标记 Offscreen 已接管，避免 fallback 再次取主线程上下文
+          offscreenActiveRef.current = true;
+          return () => {
+            window.removeEventListener('resize', onResize);
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseleave', onMouseLeave);
+            try { worker!.postMessage({ type: 'destroy' }); } catch {}
+            worker!.terminate();
+            canvasWorkerRef.current = null;
+            offscreenActiveRef.current = false;
+          };
+        }
+      }
+      // 如果创建失败或不可转移，继续走主线程绘制
+    }
+    // 如果 Offscreen 已接管（例如 Fast Refresh 未及时清理），跳过主线程绘制
+    if (offscreenActiveRef.current) return;
+    // Fallback：主线程绘制（原有实现）
+    let context: CanvasRenderingContext2D | null = null;
+    try {
+      context = canvasEl.getContext("2d");
+    } catch (err) {
+      console.warn('主线程 fallback 获取 2D 上下文失败（可能已 Offscreen 接管）:', err);
+      return;
+    }
     if (!context) return;
     const ctx = context;
     let animId = 0;
@@ -996,63 +1161,66 @@ export default function TrendingPage() {
         }
       }
 
-      // 构建空间哈希网格
-      const grid = new Map<string, number[]>();
-      const keyOf = (x: number, y: number) => `${Math.floor(x / CELL_SIZE)},${Math.floor(y / CELL_SIZE)}`;
-      particles.forEach((p, i) => {
-        const key = keyOf(p.x, p.y);
-        const cell = grid.get(key);
-        if (cell) cell.push(i); else grid.set(key, [i]);
-      });
+      // 在滚动过程中跳过重型邻接计算，减轻主线程压力
+      if (!isScrollingRef.current) {
+        // 构建空间哈希网格
+        const grid = new Map<string, number[]>();
+        const keyOf = (x: number, y: number) => `${Math.floor(x / CELL_SIZE)},${Math.floor(y / CELL_SIZE)}`;
+        particles.forEach((p, i) => {
+          const key = keyOf(p.x, p.y);
+          const cell = grid.get(key);
+          if (cell) cell.push(i); else grid.set(key, [i]);
+        });
 
-      // 计算碰撞与连线（仅检查邻近单元格）
-      const neighborsOffsets = [-1, 0, 1];
-      for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
-        const cx = Math.floor(p.x / CELL_SIZE);
-        const cy = Math.floor(p.y / CELL_SIZE);
-        for (const ox of neighborsOffsets) {
-          for (const oy of neighborsOffsets) {
-            const key = `${cx + ox},${cy + oy}`;
-            const bucket = grid.get(key);
-            if (!bucket) continue;
-            for (const j of bucket) {
-              if (j <= i) continue;
-              const q = particles[j];
-              const dx = q.x - p.x;
-              const dy = q.y - p.y;
-              const dist = Math.hypot(dx, dy);
-              // 连线效果
-              if (dist < LINK_DISTANCE) {
-                const alpha = Math.max(0.05, (LINK_DISTANCE - dist) / LINK_DISTANCE * 0.40);
-                ctx.save();
-                ctx.globalAlpha = alpha;
-                ctx.strokeStyle = '#c4b5fd'; // 薰衣草紫的连线
-                ctx.lineWidth = 0.7;
-                ctx.beginPath();
-                ctx.moveTo(p.x, p.y);
-                ctx.lineTo(q.x, q.y);
-                ctx.stroke();
-                ctx.restore();
-              }
-              // 碰撞处理：外接圆近似
-              const rSum = p.radius + q.radius;
-              if (dist > 0 && dist < rSum) {
-                const overlap = rSum - dist;
-                const nx = dx / dist;
-                const ny = dy / dist;
-                const sep = overlap * 0.5;
-                p.x -= nx * sep; p.y -= ny * sep;
-                q.x += nx * sep; q.y += ny * sep;
+        // 计算碰撞与连线（仅检查邻近单元格）
+        const neighborsOffsets = [-1, 0, 1];
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          const cx = Math.floor(p.x / CELL_SIZE);
+          const cy = Math.floor(p.y / CELL_SIZE);
+          for (const ox of neighborsOffsets) {
+            for (const oy of neighborsOffsets) {
+              const key = `${cx + ox},${cy + oy}`;
+              const bucket = grid.get(key);
+              if (!bucket) continue;
+              for (const j of bucket) {
+                if (j <= i) continue;
+                const q = particles[j];
+                const dx = q.x - p.x;
+                const dy = q.y - p.y;
+                const dist = Math.hypot(dx, dy);
+                // 连线效果
+                if (dist < LINK_DISTANCE) {
+                  const alpha = Math.max(0.05, (LINK_DISTANCE - dist) / LINK_DISTANCE * 0.40);
+                  ctx.save();
+                  ctx.globalAlpha = alpha;
+                  ctx.strokeStyle = '#c4b5fd'; // 薰衣草紫的连线
+                  ctx.lineWidth = 0.7;
+                  ctx.beginPath();
+                  ctx.moveTo(p.x, p.y);
+                  ctx.lineTo(q.x, q.y);
+                  ctx.stroke();
+                  ctx.restore();
+                }
+                // 碰撞处理：外接圆近似
+                const rSum = p.radius + q.radius;
+                if (dist > 0 && dist < rSum) {
+                  const overlap = rSum - dist;
+                  const nx = dx / dist;
+                  const ny = dy / dist;
+                  const sep = overlap * 0.5;
+                  p.x -= nx * sep; p.y -= ny * sep;
+                  q.x += nx * sep; q.y += ny * sep;
 
-                const pNorm = p.speedX * nx + p.speedY * ny;
-                const qNorm = q.speedX * nx + q.speedY * ny;
-                const diff = qNorm - pNorm;
-                p.speedX += diff * nx; p.speedY += diff * ny;
-                q.speedX -= diff * nx; q.speedY -= diff * ny;
+                  const pNorm = p.speedX * nx + p.speedY * ny;
+                  const qNorm = q.speedX * nx + q.speedY * ny;
+                  const diff = qNorm - pNorm;
+                  p.speedX += diff * nx; p.speedY += diff * ny;
+                  q.speedX -= diff * nx; q.speedY -= diff * ny;
 
-                p.speedX *= 0.98; p.speedY *= 0.98;
-                q.speedX *= 0.98; q.speedY *= 0.98;
+                  p.speedX *= 0.98; p.speedY *= 0.98;
+                  q.speedX *= 0.98; q.speedY *= 0.98;
+                }
               }
             }
           }
@@ -1105,11 +1273,32 @@ export default function TrendingPage() {
 
   // 获取预测事件数据
   useEffect(() => {
+    const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
+    const fetchWithRetry = async (url: string, opts: RequestInit = {}, retries = 2, baseDelay = 300) => {
+      let attempt = 0
+      while (true) {
+        try {
+          const res = await fetch(url, opts)
+          return res
+        } catch (err: any) {
+          // 忽略 AbortError（热更新/页面切换常见），不进入失败状态
+          if (err?.name === 'AbortError') {
+            throw err
+          }
+          if (attempt >= retries) throw err
+          const delay = baseDelay * Math.pow(2, attempt)
+          await sleep(delay)
+          attempt++
+        }
+      }
+    }
+
     const fetchPredictions = async () => {
       try {
         setLoading(true);
-        // 移除limit参数，获取所有事件数据
-        const response = await fetch('/api/predictions');
+        // 移除limit参数，获取所有事件数据；增加轻量重试与中断忽略
+        const controller = new AbortController();
+        const response = await fetchWithRetry('/api/predictions', { signal: controller.signal }, 2, 300);
         const result = await response.json();
         
         if (result.success) {
@@ -1123,8 +1312,13 @@ export default function TrendingPage() {
           setError(result.message || '获取数据失败');
         }
       } catch (err) {
-        setError('网络请求失败');
-        console.error('获取预测事件失败:', err);
+        // 热更新或主动取消时不显示失败
+        if ((err as any)?.name === 'AbortError') {
+          console.warn('预测列表请求已中止（可能由热更新触发）');
+        } else {
+          setError('网络请求失败');
+          console.error('获取预测事件失败:', err);
+        }
       } finally {
         setLoading(false);
       }
@@ -1208,7 +1402,8 @@ export default function TrendingPage() {
     tag: prediction.category,
     image: prediction.image_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(prediction.title)}&size=400&backgroundColor=b6e3f4,c0aede,d1d4f9&radius=20`,
     deadline: prediction.deadline,
-    criteria: prediction.criteria
+    criteria: prediction.criteria,
+    followers_count: Number(prediction?.followers_count || 0)
   }));
 
   // 当分类计数接口不可用时，基于已加载的预测数据进行本地回退计算
@@ -1262,6 +1457,13 @@ export default function TrendingPage() {
     ? 'bg-yellow-500'
     : 'bg-gray-400';
 
+  // 展示模式：分页 或 滚动相关的重置逻辑
+  useEffect(() => { setPage(0); }, [searchQuery, selectedCategory, sortOption]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedEvents.length / pageSize));
+  const goPrevPage = () => setPage((p) => Math.max(0, p - 1));
+  const goNextPage = () => setPage((p) => Math.min(totalPages - 1, p + 1));
+
   // 近期浏览事件：从 localStorage 读取，展示最近在详情页浏览的事件
   const [recentViewed, setRecentViewed] = useState<Array<{ id: number; title: string; category: string; seen_at: string }>>([]);
   const [recentFilter, setRecentFilter] = useState<string | null>(null);
@@ -1311,9 +1513,9 @@ export default function TrendingPage() {
       <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none opacity-60" />
       {/* 背景装饰，与首页一致 */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-gradient-to-br from-purple-200/30 to-pink-200/30 rounded-full blur-3xl"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-gradient-to-br from-blue-200/30 to-cyan-200/30 rounded-full blur-3xl"></div>
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-gradient-to-br from-indigo-200/20 to-purple-200/20 rounded-full blur-3xl"></div>
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-gradient-to-br from-purple-200/30 to-pink-200/30 rounded-full blur-xl"></div>
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-gradient-to-br from-blue-200/30 to-cyan-200/30 rounded-full blur-xl"></div>
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-gradient-to-br from-indigo-200/20 to-purple-200/20 rounded-full blur-xl"></div>
       </div>
       <TopNavBar />
 
@@ -1562,7 +1764,7 @@ export default function TrendingPage() {
 
       {/* 侧边栏 */}
       <motion.div
-        className={`fixed left-0 h-[calc(100vh-5rem)] bg-gradient-to-b from-white/95 to-gray-50/95 backdrop-blur-lg border-r border-gray-200/40 shadow-xl z-20 transition-all duration-500 ease-out ${
+        className={`fixed left-0 h-[calc(100vh-5rem)] bg-gradient-to-b from-white/95 to-gray-50/95 backdrop-blur-sm border-r border-gray-200/40 shadow-xl z-20 transition-all duration-500 ease-out ${
           sidebarCollapsed ? "w-20 rounded-r-2xl" : "w-80 rounded-r-3xl"
         } overflow-y-auto scrollbar-hide`}
         style={{
@@ -2170,9 +2372,10 @@ export default function TrendingPage() {
 
       <section
         ref={productsSectionRef}
-        className={`relative z-10 px-10 py-12 bg-white/50 backdrop-blur-lg rounded-t-3xl transition-all duration-300 ${
+        className={`relative z-10 px-10 py-12 bg-white/50 backdrop-blur-sm rounded-t-3xl transition-all duration-300 ${
           sidebarCollapsed ? "ml-20" : "ml-80"
         }`}
+        style={{ contentVisibility: 'auto', containIntrinsicSize: '1000px' }}
       >
         <h3 className="text-2xl font-bold text-black mb-8 text-center">
           加密货币保险产品
@@ -2214,30 +2417,51 @@ export default function TrendingPage() {
                 <p className="text-gray-600 mt-2">请稍后再试或联系管理员</p>
               </div>
             ) : (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="inline-flex rounded-xl overflow-hidden border bg-white/70">
+                    <button onClick={() => setViewMode('paginate')} className={`px-3 py-1 text-sm ${viewMode === 'paginate' ? 'bg-purple-600 text-white' : 'text-black'}`}>分页</button>
+                    <button onClick={() => setViewMode('scroll')} className={`px-3 py-1 text-sm ${viewMode === 'scroll' ? 'bg-purple-600 text-white' : 'text-black'}`}>滚动</button>
+                  </div>
+                  {viewMode === 'paginate' ? (
+                    <div className="flex items-center gap-2">
+                      <button onClick={goPrevPage} className="px-3 py-1 rounded-xl border bg-white/70">上一页</button>
+                      <span className="text-sm text-black">第 {page + 1} / {Math.max(1, Math.ceil(sortedEvents.length / pageSize))} 页</span>
+                      <button onClick={goNextPage} className="px-3 py-1 rounded-xl border bg-white/70">下一页</button>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-600">自动加载更多</div>
+                  )}
+                </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {sortedEvents.slice(0, displayCount).map((product, i) => (
+                {sortedEvents.slice(
+                  viewMode === 'paginate' ? page * pageSize : 0,
+                  viewMode === 'paginate' ? Math.min(sortedEvents.length, (page + 1) * pageSize) : displayCount
+                ).map((product, i) => {
+                  const globalIndex = viewMode === 'paginate' ? i + page * pageSize : i;
+                  return (
                 <motion.div
-                  key={sortedEvents[i]?.id || i}
-                  className="bg-white/70 rounded-2xl shadow-md border border-white/30 overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-lg hover:scale-105 relative"
+                  key={sortedEvents[globalIndex]?.id || globalIndex}
+                  className="bg-white/70 rounded-2xl shadow-md border border-white/30 overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-lg hover:scale-105 relative transform-gpu"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={(e) => {
-                    createSmartClickEffect(e);
+                    createCategoryParticlesAtCardClick(e, product.tag);
                   }}
                 >
                   {/* 关注按钮 */}
-                  {Number.isFinite(Number(sortedEvents[i]?.id)) && (
+                  {Number.isFinite(Number(sortedEvents[globalIndex]?.id)) && (
                     <motion.button
-                      data-event-index={i}
+                      data-event-index={globalIndex}
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        toggleFollow(i, e);
+                        toggleFollow(globalIndex, e);
                       }}
                       className="absolute top-3 left-3 z-10 p-2 bg-white/90 backdrop-blur-sm rounded-full shadow-md overflow-hidden"
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
-                      animate={followedEvents.has(Number(sortedEvents[i]?.id)) ? "liked" : "unliked"}
+                      animate={followedEvents.has(Number(sortedEvents[globalIndex]?.id)) ? "liked" : "unliked"}
                       variants={{
                         liked: { 
                           backgroundColor: "rgba(239, 68, 68, 0.1)",
@@ -2250,7 +2474,7 @@ export default function TrendingPage() {
                       }}
                     >
                       <motion.div
-                        animate={followedEvents.has(Number(sortedEvents[i]?.id)) ? "liked" : "unliked"}
+                        animate={followedEvents.has(Number(sortedEvents[globalIndex]?.id)) ? "liked" : "unliked"}
                         variants={{
                           liked: { 
                             scale: [1, 1.2, 1],
@@ -2267,7 +2491,7 @@ export default function TrendingPage() {
                       >
                         <Heart 
                           className={`w-5 h-5 ${
-                            followedEvents.has(Number(sortedEvents[i]?.id)) 
+                            followedEvents.has(Number(sortedEvents[globalIndex]?.id)) 
                               ? 'fill-red-500 text-red-500' 
                               : 'text-gray-500'
                           }`} 
@@ -2277,8 +2501,8 @@ export default function TrendingPage() {
                   )}
                   
                   {/* 产品图片：仅在存在有效 id 时可点击跳转 */}
-                  {Number.isFinite(Number(sortedEvents[i]?.id)) ? (
-                    <Link href={`/prediction/${sortedEvents[i]?.id}`}>
+                  {Number.isFinite(Number(sortedEvents[globalIndex]?.id)) ? (
+                    <Link href={`/prediction/${sortedEvents[globalIndex]?.id}`}>
                       <div className="relative h-48 overflow-hidden">
                         <img
                           src={product.image}
@@ -2330,8 +2554,8 @@ export default function TrendingPage() {
                       <p className="text-black font-bold">
                         {product.minInvestment} 起投
                       </p>
-                      {Number.isFinite(Number(sortedEvents[i]?.id)) && (
-                        <Link href={`/prediction/${sortedEvents[i]?.id}`}>
+                      {Number.isFinite(Number(sortedEvents[globalIndex]?.id)) && (
+                        <Link href={`/prediction/${sortedEvents[globalIndex]?.id}`}>
                           <button className="px-4 py-2 bg-gradient-to-r from-pink-400 to-purple-500 text-white rounded-full text-sm font-medium hover:from-pink-500 hover:to-purple-600 transition-all duration-300 shadow-md">
                             参与事件
                           </button>
@@ -2342,16 +2566,18 @@ export default function TrendingPage() {
                     {/* 关注数显示 */}
                     <div className="flex items-center text-gray-500 text-sm">
                       <Heart className="w-4 h-4 mr-1" />
-                      <span>{sortedEvents[i]?.followers_count || 0} 人关注</span>
+                      <span>{sortedEvents[globalIndex]?.followers_count || 0} 人关注</span>
                     </div>
                   </div>
                 </motion.div>
-              ))}
+              );
+                })}
             </div>
+              </>
             )}
             
             {/* 加载更多提示 */}
-            {displayCount < totalEventsCount && (
+            {viewMode === 'scroll' && displayCount < totalEventsCount && (
               <div className="text-center mt-10">
                 <p className="text-black text-sm">继续下滑加载更多事件...</p>
               </div>

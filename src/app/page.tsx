@@ -88,11 +88,13 @@ export default function App() {
   const [canvasHeight, setCanvasHeight] = useState<number>(0);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    const canvas = canvasEl as HTMLCanvasElement;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const maybeCtx = canvas.getContext("2d");
+    if (!maybeCtx) return;
+    const ctx = maybeCtx as CanvasRenderingContext2D;
 
     type Shape = 'circle' | 'square' | 'triangle' | 'diamond' | 'ring' | 'pentagon' | 'hexagon' | 'octagon';
     const COLORS = [
