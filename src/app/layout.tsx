@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { WalletProvider } from "@/contexts/WalletContext";
+import { AuthProvider } from "@/contexts/AuthContext";
 
 export default function RootLayout({
   children,
@@ -10,9 +11,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <WalletProvider>
-          {children}
-        </WalletProvider>
+        <AuthProvider>
+          <WalletProvider>
+            {children}
+          </WalletProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import { Copy, LogOut, Wallet, ExternalLink, ChevronDown } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
-import WalletModal from "./WalletModal";
+import { useAuth } from "@/contexts/AuthContext";
+import LoginModal from "./LoginModal";
 
 export default function TopNavBar() {
   const pathname = usePathname();
@@ -23,6 +24,7 @@ export default function TopNavBar() {
     availableWallets,
     currentWalletType,
   } = useWallet();
+  const { user, loading: authLoading, signOut } = useAuth();
 
   const [mounted, setMounted] = useState(false);
   // 新增：头像菜单状态与复制状态
@@ -30,6 +32,7 @@ export default function TopNavBar() {
   const [copied, setCopied] = useState(false);
   const [walletSelectorOpen, setWalletSelectorOpen] = useState(false);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const walletSelectorRef = useRef<HTMLDivElement | null>(null);
   // 新增：用于菜单定位与门户内点击判断
@@ -472,16 +475,22 @@ export default function TopNavBar() {
                 document.body
               )}
           </div>
+        ) : user ? (
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-700">已登录：{user.email || "未绑定邮箱"}</span>
+            <button
+              onClick={async () => { await signOut(); }}
+              className="px-3 py-1.5 bg-gray-100 text-gray-900 rounded-xl hover:bg-gray-200"
+            >退出</button>
+          </div>
         ) : (
           <div className="relative">
             <button
-              onClick={() => setWalletModalOpen(true)}
-              disabled={isConnecting}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl active:scale-95 flex items-center gap-2"
-              title="连接钱包"
+              onClick={() => setLoginModalOpen(true)}
+              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl active:scale-95"
+              title="登录"
             >
-              {isConnecting ? "连接中..." : "连接钱包"}
-              <Wallet className="w-4 h-4" />
+              登录
             </button>
           </div>
         )}
@@ -489,12 +498,9 @@ export default function TopNavBar() {
 
       {mounted && modal && createPortal(modal, document.body)}
       
-      {/* 钱包连接弹窗 */}
+      {/* 登录弹窗（邮箱 + 钱包） */}
       {mounted && (
-        <WalletModal 
-          isOpen={walletModalOpen} 
-          onClose={() => setWalletModalOpen(false)} 
-        />
+        <LoginModal open={loginModalOpen} onClose={() => setLoginModalOpen(false)} defaultTab="email" />
       )}
     </nav>
   );
