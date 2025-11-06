@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useWallet } from '@/contexts/WalletContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface WalletModalProps {
@@ -11,8 +12,12 @@ interface WalletModalProps {
 
 const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
   const { connectWallet, availableWallets, isConnecting } = useWallet();
+  const { user, signInWithEmail, error: authError } = useAuth();
   const [selectedWallet, setSelectedWallet] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [email, setEmail] = useState('');
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -203,6 +208,67 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
                   </div>
                 </motion.button>
               ))}
+            </div>
+
+            {/* 分隔与邮箱登录 */}
+            <div className="px-6">
+              <div className="relative my-4 flex items-center">
+                <div className="flex-1 h-px bg-gradient-to-r from-transparent via-purple-200 to-transparent" />
+                <div className="mx-3 text-xs text-gray-500">或使用邮箱登录</div>
+                <div className="flex-1 h-px bg-gradient-to-r from-transparent via-pink-200 to-transparent" />
+              </div>
+              <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg p-4 border border-white/30">
+                {user ? (
+                  <div className="text-sm text-gray-700">
+                    已登录邮箱：<span className="font-medium">{user.email || '未绑定'}</span>
+                  </div>
+                ) : (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!email) return;
+                      setEmailSending(true);
+                      try {
+                        await signInWithEmail(email);
+                        setEmailSent(true);
+                      } catch {}
+                      finally {
+                        setEmailSending(false);
+                      }
+                    }}
+                    className="space-y-3"
+                  >
+                    <label className="block text-sm font-medium text-gray-700">邮箱地址</label>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    {authError && (
+                      <div className="text-sm text-red-600">{authError}</div>
+                    )}
+                    {emailSent ? (
+                      <div className="text-sm text-green-600">
+                        登录链接已发送，请在邮箱中点击以完成登录。
+                      </div>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={emailSending}
+                        className="w-full px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:from-purple-600 hover:to-pink-600 transition-all duration-200"
+                      >
+                        {emailSending ? '发送中...' : '发送登录链接'}
+                      </button>
+                    )}
+                  </form>
+                )}
+                <p className="mt-3 text-xs text-gray-500">
+                  我们使用免密邮箱登录（Magic Link），与 Polymarket 的登录体验一致。
+                </p>
+              </div>
             </div>
 
             {/* 底部说明 */}
