@@ -1568,7 +1568,7 @@ export default function TrendingPage() {
               productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
               createSmartClickEffect(e);
             }}
-            className="px-3 py-1 text-sm bg-gradient-to-r from-pink-400 to-purple-500 text-white rounded-lg hover:from-pink-500 hover:to-purple-600 transition-colors relative overflow-hidden"
+            className="btn-base btn-sm btn-primary"
             aria-label="去探索"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
@@ -1591,9 +1591,7 @@ export default function TrendingPage() {
                       createSmartClickEffect(e);
                     }}
                     className={`text-sm px-4 py-2 rounded-full border-2 transition-all duration-200 font-medium relative overflow-hidden ${
-                      selectedCategory === ""
-                        ? "bg-gradient-to-r from-pink-500 to-purple-600 text-white border-transparent shadow-lg transform scale-105"
-                        : "border-purple-300 text-purple-700 hover:bg-purple-50 hover:border-purple-400 hover:shadow-md"
+                      selectedCategory === "" ? "btn-primary" : "btn-subtle"
                     }`}
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
@@ -2220,11 +2218,11 @@ export default function TrendingPage() {
         {/* 快速操作 */}
         <div className="p-4 border-t border-gray-200/50 mt-auto">
           <div className="space-y-2">
-            <button className="w-full flex items-center justify-center p-3 bg-gradient-to-r from-pink-400 to-purple-500 text-white rounded-xl font-medium transition-all duration-300 hover:from-pink-500 hover:to-purple-600">
+            <button className="btn-base btn-md btn-primary w-full flex items-center justify-center">
               <Wallet className="w-4 h-4 mr-2" />
               {!sidebarCollapsed && "立即投保"}
             </button>
-            <button className="w-full flex items-center justify-center p-3 bg-gradient-to-r from-purple-400 to-pink-400 text-white rounded-xl font-medium transition-all duration-300 hover:from-purple-500 hover:to-pink-500">
+            <button className="btn-base btn-md btn-secondary w-full flex items-center justify-center">
               <Gift className="w-4 h-4 mr-2" />
               {!sidebarCollapsed && "领取奖励"}
             </button>

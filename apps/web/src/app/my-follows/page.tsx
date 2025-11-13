@@ -415,7 +415,7 @@ export default function MyFollowsPage() {
                       
                       <Link href={`/prediction/${event.id}`}>
                         <motion.button
-                          className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-full text-sm font-medium hover:from-purple-600 hover:to-pink-600 transition-all duration-300"
+                          className="btn-base btn-sm btn-primary rounded-full"
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                         >

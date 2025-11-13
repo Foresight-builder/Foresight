@@ -201,7 +201,7 @@ function ReplyBox({ onSubmit }: { onSubmit: (text: string) => void }) {
     <div className="flex items-center gap-2">
       <input value={text} onChange={e => setText(e.target.value)} placeholder="写下评论…"
              className="flex-1 px-3 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white/80" />
-      <button onClick={submit} disabled={sending} className="px-3 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl text-sm disabled:opacity-50">{sending ? '发送中…' : '评论'}</button>
+      <Button onClick={submit} disabled={sending} size="sm" variant="primary">{sending ? '发送中…' : '评论'}</Button>
     </div>
   )
 }

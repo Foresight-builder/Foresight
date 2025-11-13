@@ -302,7 +302,7 @@ export default function TopNavBar() {
           className="w-12 h-12 drop-shadow-sm group-hover:drop-shadow-md transition-all duration-300 group-hover:scale-105" 
         />
         <div className="ml-4">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent group-hover:from-blue-700 group-hover:to-indigo-700 transition-all duration-300">
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-500 to-indigo-500 bg-clip-text text-transparent group-hover:from-blue-600 group-hover:to-indigo-600 transition-all duration-300">
             Foresight
           </h1>
           <span className="text-sm text-gray-600 group-hover:text-gray-700 transition-colors duration-300">Insight to outcome</span>
@@ -480,7 +480,7 @@ export default function TopNavBar() {
           <div className="relative">
             <button
               onClick={() => setWalletModalOpen(true)}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl active:scale-95"
+              className="btn-base btn-md btn-primary"
               title="登录"
             >
               登录

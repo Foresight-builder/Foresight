@@ -47,7 +47,14 @@ const { account, connectWallet, formatAddress, siweLogin, requestWalletPermissio
       } catch (e) {}
     }
     es.addEventListener('messages', onMessages)
-    es.onerror = () => {}
+    es.onerror = async () => {
+      try {
+        const res = await fetch(`/api/chat?eventId=${eventId}&limit=20`)
+        const data = await res.json()
+        const list = Array.isArray(data?.messages) ? data.messages : []
+        setMessages(list)
+      } catch {}
+    }
     return () => es.close()
   }, [eventId])
 
@@ -144,7 +151,7 @@ const { account, connectWallet, formatAddress, siweLogin, requestWalletPermissio
         {!account ? (
             <div className="flex items-center justify-between">
               <div className="text-sm text-gray-600">发送消息需连接钱包</div>
-            <button onClick={async () => { await connectWallet(); await requestWalletPermissions(); await siweLogin(); await multisigSign(); }} className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl text-sm">连接并签名</button>
+            <Button size="sm" variant="primary" onClick={async () => { await connectWallet(); await requestWalletPermissions(); await siweLogin(); await multisigSign(); }}>连接并签名</Button>
             </div>
         ) : (
           <>
@@ -196,11 +203,11 @@ const { account, connectWallet, formatAddress, siweLogin, requestWalletPermissio
                   </div>
                 )}
               </div>
-              <button onClick={sendMessage} disabled={sending} className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl text-sm font-medium disabled:opacity-50">
+              <Button onClick={sendMessage} disabled={sending} size="sm" variant="primary">
                 {sending ? (
                   <span className="inline-flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />发送中…</span>
                 ) : '发送'}
-              </button>
+              </Button>
             </div>
           </>
         )}

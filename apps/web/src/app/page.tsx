@@ -65,7 +65,7 @@ function BetBinaryDemo() {
     <div className="max-w-2xl mx-auto">
       <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-6 shadow-xl border border-white/20">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">二元预测</h3>
+          <h3 className="text-2xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">二元预测</h3>
           <div className="text-sm text-gray-500">价格走势</div>
         </div>
         <div className="mb-4"><ChartLine values={series} width={520} height={90} color="#DB2777" /></div>
@@ -73,8 +73,8 @@ function BetBinaryDemo() {
           <div className="col-span-1">
             <div className="text-sm text-gray-600 mb-2">选择方向</div>
             <div className="flex gap-3">
-              <button onClick={() => setSide('YES')} className={`px-4 py-2 rounded-xl font-semibold shadow ${side==='YES' ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>YES</button>
-              <button onClick={() => setSide('NO')} className={`px-4 py-2 rounded-xl font-semibold shadow ${side==='NO' ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>NO</button>
+              <Button variant={side==='YES' ? 'primary' : 'subtle'} onClick={() => setSide('YES')}>YES</Button>
+              <Button variant={side==='NO' ? 'primary' : 'subtle'} onClick={() => setSide('NO')}>NO</Button>
             </div>
           </div>
           <div className="col-span-1">
@@ -105,7 +105,7 @@ function BetBinaryDemo() {
           </div>
         </div>
         <div className="mt-6 flex justify-center">
-          <button className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl">模拟下单</button>
+          <Button variant="primary" size="md">模拟下单</Button>
         </div>
       </div>
     </div>
@@ -124,10 +124,10 @@ function BetMultiDemo() {
     <div className="max-w-2xl mx-auto">
       <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-6 shadow-xl border border-white/20">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">多元预测</h3>
+          <h3 className="text-2xl font-bold bg-gradient-to-r from-indigo-500 to-purple-500 bg-clip-text text-transparent">多元预测</h3>
           <div className="flex gap-2">
             {(['A','B','C'] as const).map(k => (
-              <button key={k} onClick={() => setActive(k)} className={`px-3 py-1.5 rounded-xl ${active===k ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' : 'bg-white border border-gray-200 text-gray-700'}`}>{k}</button>
+              <Button key={k} size="sm" variant={active===k ? 'primary' : 'subtle'} onClick={() => setActive(k)}>{k}</Button>
             ))}
           </div>
         </div>
@@ -151,7 +151,7 @@ function BetRangeDemo() {
     <div className="max-w-2xl mx-auto">
       <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-6 shadow-xl border border-white/20">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-2xl font-bold bg-gradient-to-r from-pink-600 to-rose-500 bg-clip-text text-transparent">区间预测</h3>
+          <h3 className="text-2xl font-bold bg-gradient-to-r from-pink-500 to-rose-400 bg-clip-text text-transparent">区间预测</h3>
         </div>
         <div className="mb-4"><ChartLine values={series} width={520} height={90} color="#F472B6" /></div>
         <div className="grid grid-cols-2 gap-4">
@@ -621,7 +621,7 @@ export default function App() {
               />
             </motion.div>
             <motion.h1 
-              className="text-5xl sm:text-6xl lg:text-7xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent mb-6 relative z-30 leading-tight"
+              className="text-5xl sm:text-6xl lg:text-7xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent mb-6 relative z-30 leading-tight"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.3 }}
@@ -651,7 +651,7 @@ export default function App() {
             <div className="max-w-2xl mx-auto">
               <div className="bg-white/85 backdrop-blur-xl rounded-3xl p-6 shadow-xl border border-white/20">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">论坛预览</h3>
+                  <h3 className="text-2xl font-bold bg-gradient-to-r from-indigo-500 to-purple-500 bg-clip-text text-transparent">论坛预览</h3>
                   <Link href="/forum"><Button variant="subtle" size="sm">更多</Button></Link>
                 </div>
                 <div className="space-y-3">
@@ -735,7 +735,7 @@ export default function App() {
               <Sparkles className="w-4 h-4 mr-1" />
               发现市场
             </div>
-            <h2 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent mb-3">
+            <h2 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent mb-3">
               找到有意思的事件
             </h2>
             <p className="text-lg text-gray-600 max-w-3xl mx-auto">
@@ -780,7 +780,7 @@ export default function App() {
               <Sparkles className="w-4 h-4 mr-1" />
               创作者入口
             </div>
-            <h2 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent mb-3">
+            <h2 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent mb-3">
               人人可创，轻松发起事件
             </h2>
             <p className="text-lg text-gray-600 max-w-3xl mx-auto">
