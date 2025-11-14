@@ -99,6 +99,10 @@ input[type="datetime-local"].date-input-beauty::-webkit-calendar-picker-indicato
 .btn-cta { background-image: linear-gradient(to right, #A855F7, #EC4899); color: #fff; border-radius: 1rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1); }
 .btn-cta:hover { filter: brightness(1.05); box-shadow: 0 12px 18px -4px rgba(0,0,0,0.12), 0 5px 7px -5px rgba(0,0,0,0.12); }
 
+/* 小尺寸 CTA 按钮使用更浅的渐变与更轻的阴影，避免突兀 */
+.btn-sm.btn-cta { background-image: linear-gradient(to right, #C084FC, #F9A8D4); box-shadow: 0 6px 10px -4px rgba(0,0,0,0.08), 0 3px 6px -4px rgba(0,0,0,0.08); }
+.btn-sm.btn-cta:hover { filter: brightness(1.04); box-shadow: 0 8px 12px -5px rgba(0,0,0,0.10), 0 3px 6px -5px rgba(0,0,0,0.10); }
+
 .chip { color: #fff; border-radius: 0.75rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; }
 
 .panel-base { border-radius: 1.5rem; box-shadow: 0 8px 24px rgba(16,24,40,0.06); border: 1px solid rgba(255,255,255,0.4); }
